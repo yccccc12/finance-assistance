@@ -10,6 +10,7 @@ import ExtractedDataForm from './ExtractedDataForm';
 import BillSplitPrompt from './BillSplitPrompt';
 import RecentReceipts from './RecentReceipts';
 import { processReceipt, formatReceiptData } from '@/lib/api';
+import ConnectionStatus from '@/components/receipt/ConnectionStatus';
 
 const ReceiptScannerInteractive = ({ initialReceipts }) => {
   const router = useRouter();
@@ -100,6 +101,11 @@ const ReceiptScannerInteractive = ({ initialReceipts }) => {
 
   return (
     <div className="space-y-6">
+      {/* Connection Status */}
+      <div className="flex justify-end">
+        <ConnectionStatus />
+      </div>
+
       {/* Error Display */}
       {error && processingStatus === 'error' && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">

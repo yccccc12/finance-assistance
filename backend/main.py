@@ -13,12 +13,12 @@ from typing import Optional
 import sys
 
 from config import get_settings
-from services.taggun_service import TaggunOCRService
 from models.schemas import (
     ReceiptUploadResponse, 
     ErrorResponse, 
     HealthCheckResponse,
-    ReceiptData
+    ReceiptData,
+    ReceiptItem
 )
 
 import os
@@ -29,6 +29,10 @@ from pathlib import Path
 import requests
 import markdown
 from bs4 import BeautifulSoup
+import tempfile
+import asyncio
+from receipt_ocr.processors import ReceiptProcessor
+from receipt_ocr.providers import OpenAIProvider
 
 from elevenlabs import ElevenLabs
 import anthropic
@@ -730,15 +734,15 @@ async def health_check():
     Health check endpoint.
     Returns the status of the API and its dependencies.
     """
-    taggun_configured = await taggun_service.health_check()
+    receipt_ocr_configured = await check_receipt_ocr_health()
     
-    logger.info("health_check", taggun_configured=taggun_configured)
+    logger.info("health_check", receipt_ocr_configured=receipt_ocr_configured)
     
     return HealthCheckResponse(
-        status="healthy" if taggun_configured else "degraded",
+        status="healthy" if receipt_ocr_configured else "degraded",
         timestamp=datetime.utcnow(),
         version="1.0.0",
-        taggun_configured=taggun_configured
+        taggun_configured=receipt_ocr_configured  # Keep field name for backward compatibility
     )
 
 
@@ -752,7 +756,7 @@ async def process_receipt(
     file: UploadFile = File(..., description="Receipt image file (JPEG, PNG, HEIC, or PDF)")
 ):
     """
-    Process a receipt image using Taggun OCR.
+    Process a receipt image using Receipt OCR (receipt-ocr library).
     
     Args:
         file: The receipt image file to process
@@ -815,17 +819,17 @@ async def process_receipt(
             detail=f"Error reading file: {str(e)}"
         )
     
-    # Process receipt with Taggun
+    # Process receipt with Receipt OCR
     try:
-        # Call Taggun API
-        taggun_response = await taggun_service.process_receipt(
+        # Process receipt using OCR
+        receipt_response = await process_receipt_with_ocr(
             file_content=file_content,
             filename=file.filename,
             content_type=file.content_type
         )
         
         # Parse the response
-        receipt_data = taggun_service.parse_taggun_response(taggun_response)
+        receipt_data = parse_receipt_response(receipt_response)
         
         processing_time = (datetime.utcnow() - start_time).total_seconds()
         
@@ -842,7 +846,7 @@ async def process_receipt(
             message="Receipt processed successfully",
             data=receipt_data,
             processing_time=processing_time,
-            raw_response=taggun_response if settings.debug else None
+            raw_response=receipt_response if settings.debug else None
         )
         
     except ValueError as e:
@@ -869,8 +873,228 @@ async def process_receipt(
         )
 
 
-# Initialize Taggun service
-taggun_service = TaggunOCRService()
+# Initialize Receipt OCR (using receipt-ocr library)
+# Initialize provider and processor
+receipt_ocr_api_key = settings.receipt_ocr_api_key
+receipt_ocr_base_url = settings.receipt_ocr_base_url
+receipt_ocr_model = settings.receipt_ocr_model
+
+receipt_ocr_provider = None
+receipt_ocr_processor = None
+
+if receipt_ocr_api_key:
+    try:
+        # Check if using Groq with a text-only model
+        is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
+        groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+        is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
+        
+        if is_groq_text_only:
+            logger.warning(
+                "groq_vision_not_supported",
+                message=f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. receipt-ocr requires vision models. "
+                        f"Consider using 'meta-llama/llama-4-scout-17b-16e-instruct' for Groq or OpenAI (gpt-4o)."
+            )
+
+        receipt_ocr_provider = OpenAIProvider(
+            api_key=receipt_ocr_api_key,
+            base_url=receipt_ocr_base_url if receipt_ocr_base_url else None
+        )
+        receipt_ocr_processor = ReceiptProcessor(receipt_ocr_provider)
+        logger.info("receipt_ocr_initialized", model=receipt_ocr_model, is_groq=is_groq)
+    except Exception as e:
+        logger.error("receipt_ocr_init_error", error=str(e))
+
+
+# Receipt OCR helper functions
+async def process_receipt_with_ocr(file_content: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+    """Process a receipt image using receipt-ocr library."""
+    if not receipt_ocr_api_key:
+        raise ValueError(
+            "Receipt OCR API key is not configured. Set RECEIPT_OCR_API_KEY in your environment or .env file."
+        )
+    
+    if not receipt_ocr_processor:
+        raise ValueError(
+            "Receipt OCR processor is not initialized. Check your API key and configuration."
+        )
+    
+    # Check if using Groq with a text-only model
+    is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
+    groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+    is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
+    
+    if is_groq_text_only:
+        raise ValueError(
+            f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. The receipt-ocr library requires vision models.\n"
+            "Options:\n"
+            "1. Use Groq's vision model: set RECEIPT_OCR_MODEL=meta-llama/llama-4-scout-17b-16e-instruct\n"
+            "2. Use OpenAI (gpt-4o) which supports vision - set RECEIPT_OCR_BASE_URL to https://api.openai.com/v1 or leave empty\n"
+            "3. Use a hybrid approach with local OCR (Tesseract) + Groq for text processing\n"
+            f"Current model: {receipt_ocr_model}"
+        )
+    
+    logger.info(
+        "processing_receipt",
+        filename=filename,
+        content_type=content_type,
+        file_size=len(file_content),
+        model=receipt_ocr_model
+    )
+    
+    start_time = datetime.utcnow()
+    
+    try:
+        # Save file content to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Define JSON schema for extraction
+            json_schema = {
+                "merchant_name": "string",
+                "merchant_address": "string",
+                "transaction_date": "string",
+                "transaction_time": "string",
+                "total_amount": "number",
+                "subtotal_amount": "number",
+                "tax_amount": "number",
+                "tip_amount": "number",
+                "currency": "string",
+                "payment_method": "string",
+                "merchant_phone": "string",
+                "line_items": [
+                    {
+                        "item_name": "string",
+                        "item_quantity": "number",
+                        "item_price": "number",
+                        "item_total": "number"
+                    }
+                ]
+            }
+            
+            # Process the receipt (run in executor since it's synchronous)
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: receipt_ocr_processor.process_receipt(
+                    tmp_file_path,
+                    json_schema,
+                    receipt_ocr_model,
+                    response_format_type="json_object"
+                )
+            )
+            
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            
+            logger.info(
+                "receipt_processed_successfully",
+                filename=filename,
+                processing_time=processing_time
+            )
+            
+            return result
+            
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+                
+    except Exception as e:
+        logger.error("receipt_ocr_processing_error", filename=filename, error=str(e))
+        raise ValueError(f"Error processing receipt: {str(e)}")
+
+
+def parse_receipt_response(receipt_data: Dict[str, Any]) -> ReceiptData:
+    """Parse receipt-ocr response into our ReceiptData model."""
+    try:
+        # Extract merchant information
+        merchant_name = receipt_data.get('merchant_name') or 'Unknown'
+        
+        # Extract amounts
+        total_amount = float(receipt_data.get('total_amount', 0.0))
+        subtotal = receipt_data.get('subtotal_amount')
+        subtotal = float(subtotal) if subtotal is not None else None
+        
+        tax = receipt_data.get('tax_amount')
+        tax = float(tax) if tax is not None else None
+        
+        tip = receipt_data.get('tip_amount')
+        tip = float(tip) if tip is not None else None
+        
+        # Extract date and time
+        receipt_date = receipt_data.get('transaction_date')
+        receipt_time = receipt_data.get('transaction_time')
+        
+        # Extract line items
+        items = []
+        line_items = receipt_data.get('line_items', [])
+        for item in line_items:
+            try:
+                item_name = item.get('item_name', 'Unknown Item')
+                item_price = float(item.get('item_price', 0.0))
+                item_quantity = int(item.get('item_quantity', 1))
+                
+                if item_name and item_price > 0:
+                    items.append(ReceiptItem(
+                        name=item_name,
+                        price=item_price,
+                        quantity=item_quantity,
+                        category=None
+                    ))
+            except (ValueError, TypeError) as e:
+                logger.warning("error_parsing_line_item", item=item, error=str(e))
+                continue
+        
+        # Extract additional information
+        currency = receipt_data.get('currency', 'USD')
+        payment_method = receipt_data.get('payment_method')
+        address = receipt_data.get('merchant_address')
+        phone = receipt_data.get('merchant_phone')
+        
+        receipt_data_obj = ReceiptData(
+            store_name=merchant_name,
+            total_amount=total_amount,
+            subtotal=subtotal,
+            tax=tax,
+            tip=tip,
+            date=receipt_date,
+            time=receipt_time,
+            items=items,
+            currency=currency,
+            payment_method=payment_method,
+            address=address,
+            phone=phone,
+            confidence=None  # receipt-ocr doesn't provide confidence score
+        )
+        
+        logger.info(
+            "receipt_response_parsed",
+            merchant=merchant_name,
+            total=total_amount,
+            items_count=len(items)
+        )
+        
+        return receipt_data_obj
+        
+    except Exception as e:
+        logger.error("error_parsing_receipt_response", error=str(e))
+        # Return minimal data if parsing fails
+        return ReceiptData(
+            store_name="Unknown",
+            total_amount=0.0,
+            items=[]
+        )
+
+
+async def check_receipt_ocr_health() -> bool:
+    """Check if Receipt OCR is accessible and properly configured."""
+    try:
+        return bool(receipt_ocr_api_key and receipt_ocr_processor is not None)
+    except Exception as e:
+        logger.error("health_check_failed", error=str(e))
+        return False
 
 
 # Exception handlers

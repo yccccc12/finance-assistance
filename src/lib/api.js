@@ -14,20 +14,30 @@ export async function processReceipt(file) {
     const formData = new FormData();
     formData.append('file', file);
 
+    console.log('📤 Uploading receipt to:', `${API_BASE_URL}/api/receipt/process`);
+
     const response = await fetch(`${API_BASE_URL}/api/receipt/process`, {
       method: 'POST',
       body: formData,
+      // Don't set Content-Type header - browser will set it with boundary for FormData
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      const errorMessage = errorData.message || errorData.detail || `HTTP error! status: ${response.status}`;
+      console.error('❌ Receipt processing error:', errorMessage);
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
+    console.log('✅ Receipt processed successfully:', data);
     return data;
   } catch (error) {
-    console.error('Error processing receipt:', error);
+    console.error('❌ Error processing receipt:', error);
+    // Provide more helpful error messages
+    if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+      throw new Error('Cannot connect to backend server. Please make sure it\'s running on http://localhost:8000');
+    }
     throw error;
   }
 }
@@ -40,6 +50,9 @@ export async function checkHealth() {
   try {
     const response = await fetch(`${API_BASE_URL}/api/health`, {
       method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
     });
 
     if (!response.ok) {

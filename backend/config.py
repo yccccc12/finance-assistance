@@ -4,23 +4,38 @@ Handles environment variables and application settings.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List, Optional
+from typing import List, Optional, ClassVar
 from functools import lru_cache
+from pathlib import Path
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
+    # Get the backend directory (where this config.py file is located)
+    backend_dir: ClassVar[Path] = Path(__file__).parent
+    env_file_path: ClassVar[Path] = backend_dir / ".env"
+    
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(env_file_path) if env_file_path.exists() else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # ignore env vars that aren't defined here
     )
     
-    # Taggun API Configuration
+    # Taggun API Configuration (deprecated - kept for backward compatibility)
     taggun_api_key: Optional[str] = None
     taggun_api_url: str = "https://api.taggun.io/api/receipt/v1/verbose/file"
+    
+    # Receipt OCR Configuration
+    receipt_ocr_api_key: Optional[str] = None
+    receipt_ocr_base_url: Optional[str] = None  # Optional, defaults to OpenAI if not set
+    # For Groq: use "https://api.groq.com/openai/v1"
+    # For OpenAI: leave empty or use "https://api.openai.com/v1"
+    receipt_ocr_model: str = "llama-3.3-70b-versatile"  # Default model
+    # For Groq with vision/image support: use "meta-llama/llama-4-scout-17b-16e-instruct" (supports images)
+    # For Groq text-only: use "llama-3.3-70b-versatile", "llama-3.1-8b-instant", etc.
+    # For OpenAI: use "gpt-4o", "gpt-4-turbo", etc.
     
     # Server Configuration
     api_host: str = "0.0.0.0"

@@ -4,7 +4,7 @@ A comprehensive personal finance management application with AI-powered receipt 
 
 ## 🌟 Features
 
-- **📸 Receipt Scanner** - AI-powered OCR using Taggun API for automatic receipt data extraction
+- **📸 Receipt Scanner** - AI-powered OCR using receipt-ocr library (LLM-based) for automatic receipt data extraction
 - **📊 Dashboard** - Visual analytics with charts for spending patterns and cash flow
 - **💰 Transaction Tracker** - Track income and expenses with voice input support
 - **📅 Subscription Manager** - Monitor recurring subscriptions and get renewal alerts
@@ -21,7 +21,7 @@ A comprehensive personal finance management application with AI-powered receipt 
 
 ### Backend
 - **Framework**: FastAPI (Python)
-- **OCR Service**: Taggun API
+- **OCR Service**: receipt-ocr library (LLM-based, supports OpenAI and compatible APIs)
 - **Logging**: Structured JSON logs with structlog
 - **Port**: 8000
 
@@ -31,7 +31,7 @@ A comprehensive personal finance management application with AI-powered receipt 
 
 - Node.js 18+ 
 - Python 3.9+
-- Taggun API key ([Get one here](https://www.taggun.io/))
+- OpenAI API key or compatible LLM API key ([Get OpenAI key here](https://platform.openai.com/api-keys))
 
 ### Option 1: Automated Setup (Recommended)
 
@@ -64,10 +64,14 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env file with your Taggun API key
+# Create .env file with your Receipt OCR API key
 cat > .env << EOF
-TAGGUN_API_KEY=your_api_key_here
-TAGGUN_API_URL=https://api.taggun.io/api/receipt/v1/verbose/file
+# Receipt OCR Configuration (using receipt-ocr library)
+RECEIPT_OCR_API_KEY=your_openai_api_key_here
+RECEIPT_OCR_BASE_URL=https://api.openai.com/v1  # Optional, defaults to OpenAI
+RECEIPT_OCR_MODEL=gpt-4o  # Model to use (e.g., gpt-4o, gpt-4-turbo, gpt-3.5-turbo)
+
+# Server Configuration
 API_HOST=0.0.0.0
 API_PORT=8000
 DEBUG=True
@@ -117,7 +121,8 @@ financeassistance/
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models
 │   ├── services/
-│   │   └── taggun_service.py        # Taggun OCR integration
+│   │   ├── receipt_ocr_service.py    # Receipt OCR integration (receipt-ocr library)
+│   │   └── taggun_service.py        # Taggun OCR integration (deprecated)
 │   ├── README.md                    # Backend documentation
 │   └── ENV_SETUP.md                 # Environment setup guide
 │
@@ -177,13 +182,42 @@ Body:
 }
 ```
 
-## 🔑 Getting Taggun API Key
+## 🔑 Getting Receipt OCR API Key
 
-1. Visit https://www.taggun.io/
-2. Sign up for a free account (100 requests/month)
-3. Navigate to your dashboard
-4. Copy your API key
-5. Add it to `backend/.env` as `TAGGUN_API_KEY`
+### Option 1: Groq (Recommended - Fast & Free Tier Available)
+
+1. Visit https://console.groq.com/keys
+2. Sign up or log in to your Groq account
+3. Create a new API key
+4. Add to `backend/.env`:
+   ```env
+   RECEIPT_OCR_API_KEY=your_groq_api_key_here
+   RECEIPT_OCR_BASE_URL=https://api.groq.com/openai/v1
+   RECEIPT_OCR_MODEL=llama-3.3-70b-versatile
+   ```
+5. Available Groq models:
+   - `llama-3.3-70b-versatile` - Latest version, best quality (default)
+   - `llama-3.1-70b-versatile` - Previous version, best quality
+   - `llama-3.1-8b-instant` - Fastest
+   - `mixtral-8x7b-32768` - Good balance
+
+### Option 2: OpenAI
+
+1. Visit https://platform.openai.com/api-keys
+2. Sign up or log in to your OpenAI account
+3. Create a new API key
+4. Add it to `backend/.env` as `RECEIPT_OCR_API_KEY`
+5. Optionally set `RECEIPT_OCR_MODEL` (default: `llama-3.3-70b-versatile` for Groq)
+
+### Option 3: Other Compatible LLM APIs
+
+The receipt-ocr library supports any OpenAI-compatible API:
+
+1. Set `RECEIPT_OCR_API_KEY` to your API key
+2. Set `RECEIPT_OCR_BASE_URL` to your API base URL (e.g., `https://api.openai.com/v1`)
+3. Set `RECEIPT_OCR_MODEL` to a supported model name
+
+**Note**: Taggun is deprecated but still available for backward compatibility.
 
 ## 🧪 Testing
 
@@ -249,10 +283,12 @@ source backend/venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-**"Taggun API key not configured"**
+**"Receipt OCR API key not configured"**
 - Verify `backend/.env` file exists
-- Check `TAGGUN_API_KEY` is set correctly
+- Check `RECEIPT_OCR_API_KEY` is set correctly
+- Verify `RECEIPT_OCR_MODEL` is set (default: `llama-3.3-70b-versatile` for Groq)
 - Restart backend server
+- Ensure `receipt-ocr` package is installed: `pip install receipt-ocr`
 
 ### Frontend Issues
 
@@ -303,7 +339,8 @@ lsof -ti:4028 | xargs kill -9
 - Uvicorn
 
 ### External Services
-- Taggun OCR API
+- receipt-ocr library (LLM-based OCR)
+- OpenAI API (or compatible LLM API)
 
 ## 🚀 Deployment
 
