@@ -9,6 +9,40 @@ import ChatInput from './ChatInput';
 import QuickActionButtons from './QuickActionButtons';
 import EmptyState from './EmptyState';
 import { sendClaudeMessage } from '@/services/aiAssistantApi';
+import { getAllTransactions } from '@/services/transactionApi';
+
+const shouldFetchTransactions = (text) => {
+  const lower = text?.toLowerCase() || '';
+  return (
+    lower?.includes('transaction') ||
+    lower?.includes('transactions') ||
+    lower?.includes('transcription') ||
+    lower?.includes('spending') ||
+    lower?.includes('expenses') ||
+    lower?.includes('subscription') ||
+    lower?.includes('subscriptions') ||
+    lower?.includes('bill') ||
+    lower?.includes('billing') ||
+    lower?.includes('charge') ||
+    lower?.includes('payment') ||
+    lower?.includes('purchase')
+  );
+};
+
+const formatTransactionsForPrompt = (transactions = []) => {
+  if (!transactions?.length) return '';
+
+  const recent = transactions?.slice(0, 8);
+  const lines = recent?.map((t) => {
+    const date = t?.purchase_date?.toString?.()?.split?.('T')?.[0] || t?.purchase_date || 'N/A';
+    const category = t?.category || 'uncategorized';
+    const description = t?.description || '';
+    const amount = typeof t?.amount === 'number' ? t?.amount?.toFixed(2) : t?.amount;
+    return `- ${date} | ${category} | $${amount} | ${description}`;
+  });
+
+  return `\n\nUse these recent transactions (latest first) if helpful:\n${lines?.join('\n')}`;
+};
 
 const AIAssistantInteractive = ({ initialMessages }) => {
   const [messages, setMessages] = useState(initialMessages);
@@ -35,7 +69,21 @@ const AIAssistantInteractive = ({ initialMessages }) => {
     setIsTyping(true);
 
     try {
-      const response = await sendClaudeMessage(messageText);
+      let messageWithContext = messageText;
+
+      if (shouldFetchTransactions(messageText)) {
+        try {
+          const transactions = await getAllTransactions();
+          const contextBlock = formatTransactionsForPrompt(transactions);
+          if (contextBlock) {
+            messageWithContext = `${messageText}${contextBlock}`;
+          }
+        } catch (fetchErr) {
+          console.error('Transaction fetch for chat context failed:', fetchErr);
+        }
+      }
+
+      const response = await sendClaudeMessage(messageWithContext);
       const aiMessage = {
         id: `msg-${Date.now()}-ai`,
         sender: 'ai',

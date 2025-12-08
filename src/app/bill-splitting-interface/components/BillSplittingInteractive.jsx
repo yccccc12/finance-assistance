@@ -14,18 +14,22 @@ const BillSplittingInteractive = ({ initialData }) => {
   const [items, setItems] = useState(initialData?.items || []);
   const [participants, setParticipants] = useState(initialData?.participants || []);
   const [taxTipData, setTaxTipData] = useState({
-    tax: 0,
-    tip: 0,
-    splitMethod: 'proportional'
+    taxPercent: initialData?.taxPercent || 0
   });
+  const [currency, setCurrency] = useState(initialData?.currency || '$');
   const [showExportModal, setShowExportModal] = useState(false);
 
   const calculateSubtotal = () => {
     return items?.reduce((sum, item) => sum + item?.totalPrice, 0);
   };
 
+  const calculateTaxAmount = () => {
+    const subtotal = calculateSubtotal();
+    return subtotal * (taxTipData?.taxPercent / 100);
+  };
+
   const calculateTotal = () => {
-    return calculateSubtotal() + taxTipData?.tax + taxTipData?.tip;
+    return calculateSubtotal() + calculateTaxAmount();
   };
 
   const calculateParticipantAmount = (participantId) => {
@@ -39,16 +43,9 @@ const BillSplittingInteractive = ({ initialData }) => {
       itemsTotal += item?.totalPrice / shareCount;
     });
 
-    const subtotal = calculateSubtotal();
-    if (subtotal === 0) return 0;
-
-    if (taxTipData?.splitMethod === 'proportional') {
-      const proportion = itemsTotal / subtotal;
-      return itemsTotal + (taxTipData?.tax * proportion) + (taxTipData?.tip * proportion);
-    } else {
-      const equalShare = (taxTipData?.tax + taxTipData?.tip) / participants?.length;
-      return itemsTotal + equalShare;
-    }
+    // Apply tax percentage to participant's items
+    const taxAmount = itemsTotal * (taxTipData?.taxPercent / 100);
+    return itemsTotal + taxAmount;
   };
 
   const handleToggleParticipant = (itemId, participantId) => {
@@ -87,7 +84,7 @@ const BillSplittingInteractive = ({ initialData }) => {
     const newParticipant = {
       id: `participant-${Date.now()}`,
       name: participantData?.name,
-      email: participantData?.email
+      contact: participantData?.contact
     };
     setParticipants(prev => [...prev, newParticipant]);
   };
@@ -102,6 +99,46 @@ const BillSplittingInteractive = ({ initialData }) => {
 
   const handleExport = () => {
     setShowExportModal(true);
+  };
+
+  const sendViaWhatsApp = (participant) => {
+    const participantItems = items.filter(item => 
+      item?.assignedTo?.includes(participant.id)
+    );
+    
+    let itemsTotal = 0;
+    let itemsList = participantItems.map(item => {
+      const shareCount = item.assignedTo.length;
+      const itemShare = item.totalPrice / shareCount;
+      itemsTotal += itemShare;
+      return `• ${item.name} (${shareCount > 1 ? `split ${shareCount} ways` : 'yours'}): ${currency}${itemShare.toFixed(2)}`;
+    }).join('\n');
+
+    const taxAmount = itemsTotal * (taxTipData?.taxPercent / 100);
+    const totalAmount = itemsTotal + taxAmount;
+
+    const message = `🧾 *Bill Split Summary*\n\n` +
+      `Hi ${participant.name}! Here's your share:\n\n` +
+      `📍 ${initialData?.storeName || 'Restaurant'}\n` +
+      `📅 ${initialData?.receiptDate ? new Date(initialData.receiptDate).toLocaleDateString() : 'Today'}\n\n` +
+      `*Your Items:*\n${itemsList}\n\n` +
+      `Subtotal: ${currency}${itemsTotal.toFixed(2)}\n` +
+      `Tax (${taxTipData?.taxPercent}%): ${currency}${taxAmount.toFixed(2)}\n` +
+      `━━━━━━━━━━━━━━━━\n` +
+      `*TOTAL: ${currency}${totalAmount.toFixed(2)}*`;
+
+    // Clean phone number (remove spaces, dashes, parentheses)
+    const cleanPhone = participant.contact.replace(/[\s\-\(\)]/g, '');
+    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const sendToAll = () => {
+    participants.forEach((participant) => {
+      setTimeout(() => sendViaWhatsApp(participant), 500);
+    });
+    setShowExportModal(false);
   };
 
   const getParticipantItemCount = (participantId) => {
@@ -144,15 +181,14 @@ const BillSplittingInteractive = ({ initialData }) => {
                       participants={participants}
                       onToggleParticipant={handleToggleParticipant}
                       onRemoveItem={handleRemoveItem}
+                      currency={currency}
                     />
                   ))
                 )}
               </div>
 
-              <AddItemForm onAdd={handleAddItem} />
+              <AddItemForm onAdd={handleAddItem} currency={currency} />
             </div>
-
-            <TaxTipControls onUpdate={setTaxTipData} />
           </div>
 
           {/* Right Column - Participants & Summary */}
@@ -177,6 +213,7 @@ const BillSplittingInteractive = ({ initialData }) => {
                       totalAmount={calculateParticipantAmount(participant?.id)}
                       itemCount={getParticipantItemCount(participant?.id)}
                       onRemove={handleRemoveParticipant}
+                      currency={currency}
                     />
                   ))
                 )}
@@ -185,12 +222,14 @@ const BillSplittingInteractive = ({ initialData }) => {
               <AddParticipantForm onAdd={handleAddParticipant} />
             </div>
 
+            <TaxTipControls onUpdate={setTaxTipData} initialTaxPercent={taxTipData?.taxPercent} currency={currency} />
+
             <SplitSummary
               subtotal={calculateSubtotal()}
-              tax={taxTipData?.tax}
-              tip={taxTipData?.tip}
+              taxPercent={taxTipData?.taxPercent}
+              taxAmount={calculateTaxAmount()}
               total={calculateTotal()}
-              splitMethod={taxTipData?.splitMethod}
+              currency={currency}
             />
 
             <button
@@ -209,7 +248,7 @@ const BillSplittingInteractive = ({ initialData }) => {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-1030 p-4">
           <div className="bg-card rounded-lg max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold text-foreground">Export Split</h3>
+              <h3 className="text-xl font-semibold text-foreground">Send Bill Split</h3>
               <button
                 onClick={() => setShowExportModal(false)}
                 className="p-1 hover:bg-muted rounded-md transition-quick"
@@ -218,20 +257,48 @@ const BillSplittingInteractive = ({ initialData }) => {
               </button>
             </div>
 
-            <div className="space-y-3">
-              <button className="w-full flex items-center space-x-3 px-4 py-3 bg-muted hover:bg-muted/80 rounded-lg transition-quick">
-                <Icon name="EnvelopeIcon" size={20} variant="outline" />
-                <span className="text-foreground font-medium">Send via Email</span>
+            <p className="text-sm text-muted-foreground mb-4">
+              Send each participant their share via WhatsApp
+            </p>
+
+            <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
+              {participants.map(participant => (
+                <button
+                  key={participant.id}
+                  onClick={() => sendViaWhatsApp(participant)}
+                  className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-success/10 hover:border-success rounded-lg transition-quick border border-border"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 bg-success/20 rounded-full flex items-center justify-center">
+                      <Icon name="ChatBubbleBottomCenterTextIcon" size={16} variant="solid" className="text-success" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-foreground font-medium">{participant.name}</p>
+                      <p className="text-xs text-muted-foreground">{participant.contact}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-bold text-foreground">{currency}{calculateParticipantAmount(participant.id).toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">via WhatsApp</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="border-t border-border pt-4 space-y-2">
+              <button 
+                onClick={sendToAll}
+                className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-success text-success-foreground rounded-lg font-medium hover:bg-success/90 transition-quick"
+              >
+                <Icon name="PaperAirplaneIcon" size={20} variant="solid" />
+                <span>Send to All Participants</span>
               </button>
 
-              <button className="w-full flex items-center space-x-3 px-4 py-3 bg-muted hover:bg-muted/80 rounded-lg transition-quick">
-                <Icon name="LinkIcon" size={20} variant="outline" />
-                <span className="text-foreground font-medium">Copy Payment Link</span>
-              </button>
-
-              <button className="w-full flex items-center space-x-3 px-4 py-3 bg-muted hover:bg-muted/80 rounded-lg transition-quick">
-                <Icon name="DocumentTextIcon" size={20} variant="outline" />
-                <span className="text-foreground font-medium">Download PDF</span>
+              <button 
+                onClick={() => setShowExportModal(false)}
+                className="w-full px-4 py-2 text-muted-foreground hover:text-foreground transition-quick"
+              >
+                Cancel
               </button>
             </div>
           </div>
@@ -243,6 +310,10 @@ const BillSplittingInteractive = ({ initialData }) => {
 
 BillSplittingInteractive.propTypes = {
   initialData: PropTypes?.shape({
+    storeName: PropTypes?.string,
+    receiptDate: PropTypes?.string,
+    taxPercent: PropTypes?.number,
+    currency: PropTypes?.string,
     items: PropTypes?.arrayOf(
       PropTypes?.shape({
         id: PropTypes?.string?.isRequired,
@@ -257,7 +328,7 @@ BillSplittingInteractive.propTypes = {
       PropTypes?.shape({
         id: PropTypes?.string?.isRequired,
         name: PropTypes?.string?.isRequired,
-        email: PropTypes?.string?.isRequired
+        contact: PropTypes?.string?.isRequired
       })
     )
   })?.isRequired

@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import TransactionForm from './TransactionForm';
-import VoiceInput from './VoiceInput';
 import TransactionList from './TransactionList';
+import Icon from '@/components/ui/AppIcon';
 import { 
   getAllTransactions, 
   createTransaction, 
@@ -26,7 +26,12 @@ const TransactionTrackerInteractive = () => {
       setLoading(true);
       setError(null);
       const data = await getAllTransactions();
-      setTransactions(data);
+      // Normalize transaction data: convert purchase_date to date
+      const normalizedData = data.map(transaction => ({
+        ...transaction,
+        date: transaction.purchase_date || transaction.date || null
+      }));
+      setTransactions(normalizedData);
     } catch (error) {
       console.error('Error loading transactions:', error);
       setError('Failed to load transactions. Please check your connection.');
@@ -38,28 +43,17 @@ const TransactionTrackerInteractive = () => {
   const handleAddTransaction = async (transaction) => {
     try {
       const newTransaction = await createTransaction(transaction);
-      setTransactions(prev => [newTransaction, ...prev]);
-      return { success: true, data: newTransaction };
+      // Normalize the new transaction: convert purchase_date to date
+      const normalizedTransaction = {
+        ...newTransaction,
+        date: newTransaction.purchase_date || newTransaction.date || null
+      };
+      setTransactions(prev => [normalizedTransaction, ...prev]);
+      return { success: true, data: normalizedTransaction };
     } catch (error) {
       console.error('Error adding transaction:', error);
       setError('Failed to add transaction. Please try again.');
       return { success: false, error };
-    }
-  };
-
-  const handleVoiceTransaction = async (parsedData) => {
-    try {
-      const transaction = {
-        description: parsedData.description,
-        amount: parsedData.amount,
-        date: parsedData.date,
-        category: parsedData.category
-      };
-      const newTransaction = await createTransaction(transaction);
-      setTransactions(prev => [newTransaction, ...prev]);
-    } catch (error) {
-      console.error('Error adding voice transaction:', error);
-      setError('Failed to add voice transaction. Please try again.');
     }
   };
 
@@ -71,8 +65,13 @@ const TransactionTrackerInteractive = () => {
         date: updatedTransaction.date,
         category: updatedTransaction.category
       });
+      // Normalize the updated transaction: convert purchase_date to date
+      const normalizedResult = {
+        ...result,
+        date: result.purchase_date || result.date || null
+      };
       setTransactions(prev =>
-        prev?.map(t => (t?.id === result?.id ? result : t))
+        prev?.map(t => (t?.id === normalizedResult?.id ? normalizedResult : t))
       );
     } catch (error) {
       console.error('Error updating transaction:', error);
@@ -96,7 +95,7 @@ const TransactionTrackerInteractive = () => {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-foreground mb-2">Transaction Tracker</h1>
           <p className="text-muted-foreground">
-            Add transactions manually or use voice input for hands-free entry
+            Add transactions manually or use the microphone button for voice input
           </p>
         </div>
 
@@ -113,19 +112,15 @@ const TransactionTrackerInteractive = () => {
         )}
 
         {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-            <p className="mt-4 text-muted-foreground">Loading transactions...</p>
+          <div className="bg-card border border-border rounded-lg p-12 text-center">
+            <Icon name="ArrowPathIcon" size={64} variant="outline" className="text-muted-foreground mx-auto mb-4 animate-spin" />
+            <h3 className="text-xl font-semibold text-foreground mb-2">Loading transactions...</h3>
+            <p className="text-muted-foreground">Please wait while we fetch your data</p>
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-              <div className="lg:col-span-2">
-                <TransactionForm onAddTransaction={handleAddTransaction} />
-              </div>
-              <div>
-                <VoiceInput onTranscriptionComplete={handleVoiceTransaction} />
-              </div>
+            <div className="mb-8">
+              <TransactionForm onAddTransaction={handleAddTransaction} />
             </div>
 
             <TransactionList

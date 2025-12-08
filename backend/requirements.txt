@@ -9,3 +9,5 @@ python-multipart
 pytz
 sqlalchemy
 pymysql
+pydantic>=2.10.0
+pydantic-settings>=2.6.0

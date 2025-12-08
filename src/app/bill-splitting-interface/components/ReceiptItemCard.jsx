@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
 
-const ReceiptItemCard = ({ item, participants, onToggleParticipant, onRemoveItem }) => {
+const ReceiptItemCard = ({ item, participants, onToggleParticipant, onRemoveItem, currency = 'RM' }) => {
   const assignedCount = item?.assignedTo?.length || 0;
   const isShared = assignedCount > 1;
 
@@ -11,12 +11,12 @@ const ReceiptItemCard = ({ item, participants, onToggleParticipant, onRemoveItem
         <div className="flex-1">
           <h4 className="font-semibold text-foreground text-base">{item?.name}</h4>
           <p className="text-sm text-muted-foreground mt-1">
-            Qty: {item?.quantity} × ${item?.unitPrice?.toFixed(2)}
+            Qty: {item?.quantity} × {currency}{item?.unitPrice?.toFixed(2)}
           </p>
         </div>
         <div className="flex items-center space-x-3">
           <span className="text-lg font-bold text-foreground">
-            ${item?.totalPrice?.toFixed(2)}
+            {currency}{item?.totalPrice?.toFixed(2)}
           </span>
           <button
             onClick={() => onRemoveItem(item?.id)}
@@ -83,7 +83,8 @@ ReceiptItemCard.propTypes = {
     })
   )?.isRequired,
   onToggleParticipant: PropTypes?.func?.isRequired,
-  onRemoveItem: PropTypes?.func?.isRequired
+  onRemoveItem: PropTypes?.func?.isRequired,
+  currency: PropTypes?.string
 };
 
 export default ReceiptItemCard;

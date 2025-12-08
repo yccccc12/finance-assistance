@@ -4,7 +4,7 @@ import { useState } from 'react';
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
 
-const AddItemForm = ({ onAdd }) => {
+const AddItemForm = ({ onAdd, currency = 'RM' }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
@@ -91,7 +91,7 @@ const AddItemForm = ({ onAdd }) => {
 
         <div>
           <label htmlFor="unitPrice" className="block text-sm font-medium text-foreground mb-1">
-            Price ($)
+            Price ({currency})
           </label>
           <input
             type="number"
@@ -118,7 +118,8 @@ const AddItemForm = ({ onAdd }) => {
 };
 
 AddItemForm.propTypes = {
-  onAdd: PropTypes?.func?.isRequired
+  onAdd: PropTypes?.func?.isRequired,
+  currency: PropTypes?.string
 };
 
 export default AddItemForm;

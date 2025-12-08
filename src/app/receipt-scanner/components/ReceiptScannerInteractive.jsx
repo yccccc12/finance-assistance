@@ -9,6 +9,7 @@ import ReceiptPreview from './ReceiptPreview';
 import ExtractedDataForm from './ExtractedDataForm';
 import BillSplitPrompt from './BillSplitPrompt';
 import RecentReceipts from './RecentReceipts';
+import { processReceipt, formatReceiptData } from '@/lib/api';
 
 const ReceiptScannerInteractive = ({ initialReceipts }) => {
   const router = useRouter();
@@ -18,56 +19,59 @@ const ReceiptScannerInteractive = ({ initialReceipts }) => {
   const [receiptUrl, setReceiptUrl] = useState('');
   const [extractedData, setExtractedData] = useState(null);
   const [showBillSplit, setShowBillSplit] = useState(false);
+  const [error, setError] = useState(null);
 
-  const simulateOCRProcessing = (file) => {
+  const processReceiptWithOCR = async (file) => {
     setProcessingStatus('uploading');
     setProgress(0);
+    setError(null);
 
-    setTimeout(() => {
-      setProgress(30);
+    try {
+      // Update progress - uploading
+      setProgress(20);
       setProcessingStatus('processing');
-    }, 500);
 
-    setTimeout(() => {
+      // Call backend API
+      const response = await processReceipt(file);
+
+      // Update progress - processing
       setProgress(60);
       setProcessingStatus('extracting');
-    }, 1500);
 
-    setTimeout(() => {
+      // Small delay for UX
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Update progress - complete
       setProgress(100);
       setProcessingStatus('complete');
 
-      const mockExtractedData = {
-        storeName: 'Whole Foods Market',
-        totalAmount: '87.45',
-        date: '2025-12-05',
-        items: [
-          { name: 'Organic Bananas', price: '3.99' },
-          { name: 'Almond Milk', price: '4.50' },
-          { name: 'Whole Grain Bread', price: '5.25' },
-          { name: 'Free Range Eggs', price: '6.99' },
-          { name: 'Greek Yogurt', price: '8.50' },
-          { name: 'Mixed Salad Greens', price: '4.75' },
-          { name: 'Cherry Tomatoes', price: '5.99' },
-          { name: 'Avocados (3 pack)', price: '7.99' },
-          { name: 'Chicken Breast', price: '15.50' },
-          { name: 'Olive Oil', price: '12.99' },
-          { name: 'Pasta', price: '3.25' },
-          { name: 'Marinara Sauce', price: '4.75' },
-          { name: 'Parmesan Cheese', price: '7.00' }
-        ]
-      };
+      // Format and set the extracted data
+      const formattedData = formatReceiptData(response);
+      
+      if (formattedData) {
+        setExtractedData(formattedData);
+        setShowBillSplit(true);
+      } else {
+        throw new Error('Failed to extract receipt data');
+      }
 
-      setExtractedData(mockExtractedData);
-      setShowBillSplit(true);
-    }, 2500);
+    } catch (err) {
+      console.error('OCR processing error:', err);
+      setProcessingStatus('error');
+      setError(err.message || 'Failed to process receipt. Please try again.');
+      
+      // Show error for a moment then reset
+      setTimeout(() => {
+        handleReset();
+      }, 3000);
+    }
   };
 
   const handleFileSelect = (file) => {
     setSelectedFile(file);
     const url = URL.createObjectURL(file);
     setReceiptUrl(url);
-    simulateOCRProcessing(file);
+    processReceiptWithOCR(file);
   };
 
   const handleSaveReceipt = (formData) => {
@@ -96,12 +100,30 @@ const ReceiptScannerInteractive = ({ initialReceipts }) => {
 
   return (
     <div className="space-y-6">
+      {/* Error Display */}
+      {error && processingStatus === 'error' && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="flex items-start">
+            <svg className="w-5 h-5 text-red-500 mt-0.5 mr-3" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+            </svg>
+            <div className="flex-1">
+              <h3 className="text-sm font-medium text-red-800">Processing Error</h3>
+              <p className="mt-1 text-sm text-red-700">{error}</p>
+              <p className="mt-2 text-xs text-red-600">
+                Make sure the backend server is running and properly configured.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Upload or Processing Section */}
       {processingStatus === 'idle' && (
         <UploadZone onFileSelect={handleFileSelect} isProcessing={false} />
       )}
 
-      {processingStatus !== 'idle' && processingStatus !== 'complete' && (
+      {processingStatus !== 'idle' && processingStatus !== 'complete' && processingStatus !== 'error' && (
         <ProcessingIndicator status={processingStatus} progress={progress} />
       )}
 

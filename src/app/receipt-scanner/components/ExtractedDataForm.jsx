@@ -8,7 +8,10 @@ const ExtractedDataForm = ({ extractedData, onSave, onCancel }) => {
   const [formData, setFormData] = useState({
     storeName: '',
     totalAmount: '',
+    subtotal: '',
+    tax: '',
     date: '',
+    currency: 'USD',
     items: []
   });
 
@@ -19,7 +22,10 @@ const ExtractedDataForm = ({ extractedData, onSave, onCancel }) => {
       setFormData({
         storeName: extractedData?.storeName || '',
         totalAmount: extractedData?.totalAmount || '',
+        subtotal: extractedData?.subtotal || '',
+        tax: extractedData?.tax || '',
         date: extractedData?.date || '',
+        currency: extractedData?.currency || 'USD',
         items: extractedData?.items || []
       });
     }
@@ -97,9 +103,16 @@ const ExtractedDataForm = ({ extractedData, onSave, onCancel }) => {
     <form onSubmit={handleSubmit} className="bg-card border border-border rounded-lg p-6">
       <div className="flex items-center justify-between mb-6">
         <h3 className="text-lg font-semibold text-foreground">Extracted Receipt Data</h3>
-        <div className="flex items-center space-x-2 text-xs text-muted-foreground">
-          <Icon name="PencilIcon" size={16} variant="outline" />
-          <span>Edit to correct any errors</span>
+        <div className="flex items-center space-x-3">
+          {formData?.currency && formData?.currency !== 'USD' && (
+            <div className="px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded">
+              Currency: {formData?.currency}
+            </div>
+          )}
+          <div className="flex items-center space-x-2 text-xs text-muted-foreground">
+            <Icon name="PencilIcon" size={16} variant="outline" />
+            <span>Edit to correct any errors</span>
+          </div>
         </div>
       </div>
       <div className="space-y-4">
@@ -148,6 +161,51 @@ const ExtractedDataForm = ({ extractedData, onSave, onCancel }) => {
           {errors?.totalAmount && (
             <p className="text-xs text-error mt-1">{errors?.totalAmount}</p>
           )}
+        </div>
+
+        {/* Amount Breakdown */}
+        <div className="grid grid-cols-2 gap-4">
+          {/* Subtotal */}
+          <div>
+            <label htmlFor="subtotal" className="block text-sm font-medium text-foreground mb-1">
+              Subtotal
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+              <input
+                type="number"
+                id="subtotal"
+                name="subtotal"
+                value={formData?.subtotal}
+                onChange={handleInputChange}
+                step="0.01"
+                min="0"
+                className="w-full pl-8 pr-2 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-quick text-sm"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+
+          {/* Tax */}
+          <div>
+            <label htmlFor="tax" className="block text-sm font-medium text-foreground mb-1">
+              Tax
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+              <input
+                type="number"
+                id="tax"
+                name="tax"
+                value={formData?.tax}
+                onChange={handleInputChange}
+                step="0.01"
+                min="0"
+                className="w-full pl-8 pr-2 py-2 border border-input rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-quick text-sm"
+                placeholder="0.00"
+              />
+            </div>
+          </div>
         </div>
 
         {/* Date */}
@@ -251,7 +309,10 @@ ExtractedDataForm.propTypes = {
   extractedData: PropTypes?.shape({
     storeName: PropTypes?.string,
     totalAmount: PropTypes?.string,
+    subtotal: PropTypes?.oneOfType([PropTypes?.string, PropTypes?.number]),
+    tax: PropTypes?.oneOfType([PropTypes?.string, PropTypes?.number]),
     date: PropTypes?.string,
+    currency: PropTypes?.string,
     items: PropTypes?.arrayOf(
       PropTypes?.shape({
         name: PropTypes?.string,

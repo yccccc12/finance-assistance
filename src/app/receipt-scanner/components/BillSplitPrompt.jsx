@@ -32,6 +32,9 @@ const BillSplitPrompt = ({ receiptData, onDismiss }) => {
                   storeName: receiptData?.storeName,
                   totalAmount: receiptData?.totalAmount,
                   date: receiptData?.date,
+                  tax: receiptData?.tax || '',
+                  subtotal: receiptData?.subtotal || '',
+                  currency: receiptData?.currency || 'USD',
                   items: JSON.stringify(receiptData?.items)
                 }
               }}
@@ -66,6 +69,8 @@ BillSplitPrompt.propTypes = {
     storeName: PropTypes?.string,
     totalAmount: PropTypes?.string,
     date: PropTypes?.string,
+    tax: PropTypes?.oneOfType([PropTypes?.string, PropTypes?.number]),
+    subtotal: PropTypes?.oneOfType([PropTypes?.string, PropTypes?.number]),
     items: PropTypes?.arrayOf(
       PropTypes?.shape({
         name: PropTypes?.string,

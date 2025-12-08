@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
 
-const SplitSummary = ({ subtotal, tax, tip, total, splitMethod }) => {
+const SplitSummary = ({ subtotal, taxPercent, taxAmount, total, currency = '$' }) => {
   return (
     <div className="bg-card border border-border rounded-lg p-6">
       <h3 className="text-lg font-semibold text-foreground mb-4 flex items-center">
@@ -11,29 +11,23 @@ const SplitSummary = ({ subtotal, tax, tip, total, splitMethod }) => {
       <div className="space-y-3">
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Subtotal</span>
-          <span className="font-medium text-foreground">${subtotal?.toFixed(2)}</span>
+          <span className="font-medium text-foreground">{currency}{subtotal?.toFixed(2)}</span>
         </div>
 
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Tax</span>
-          <span className="font-medium text-foreground">${tax?.toFixed(2)}</span>
-        </div>
-
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Tip</span>
-          <span className="font-medium text-foreground">${tip?.toFixed(2)}</span>
+          <span className="text-muted-foreground">Tax ({taxPercent}%)</span>
+          <span className="font-medium text-foreground">{currency}{taxAmount?.toFixed(2)}</span>
         </div>
 
         <div className="border-t border-border pt-3 mt-3">
           <div className="flex items-center justify-between">
             <span className="font-semibold text-foreground">Total</span>
-            <span className="text-2xl font-bold text-primary">${total?.toFixed(2)}</span>
+            <span className="text-2xl font-bold text-primary">{currency}{total?.toFixed(2)}</span>
           </div>
         </div>
 
         <div className="bg-muted rounded-md p-3 mt-4">
-          <p className="text-xs text-muted-foreground mb-1">Split Method</p>
-          <p className="text-sm font-medium text-foreground capitalize">{splitMethod}</p>
+          <p className="text-xs text-muted-foreground">Each participant pays {taxPercent}% tax on their assigned items</p>
         </div>
       </div>
     </div>
@@ -42,10 +36,10 @@ const SplitSummary = ({ subtotal, tax, tip, total, splitMethod }) => {
 
 SplitSummary.propTypes = {
   subtotal: PropTypes?.number?.isRequired,
-  tax: PropTypes?.number?.isRequired,
-  tip: PropTypes?.number?.isRequired,
+  taxPercent: PropTypes?.number?.isRequired,
+  taxAmount: PropTypes?.number?.isRequired,
   total: PropTypes?.number?.isRequired,
-  splitMethod: PropTypes?.string?.isRequired
+  currency: PropTypes?.string
 };
 
 export default SplitSummary;

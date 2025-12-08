@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
 
-const ParticipantCard = ({ participant, totalAmount, itemCount, onRemove }) => {
+const ParticipantCard = ({ participant, totalAmount, itemCount, onRemove, currency = 'RM' }) => {
   return (
     <div className="bg-card border border-border rounded-lg p-4 hover:shadow-md transition-smooth">
       <div className="flex items-start justify-between mb-3">
@@ -11,7 +11,10 @@ const ParticipantCard = ({ participant, totalAmount, itemCount, onRemove }) => {
           </div>
           <div>
             <h4 className="font-semibold text-foreground">{participant?.name}</h4>
-            <p className="text-sm text-muted-foreground">{participant?.email}</p>
+            <p className="text-sm text-muted-foreground flex items-center">
+              <Icon name="PhoneIcon" size={14} variant="outline" className="mr-1" />
+              {participant?.contact}
+            </p>
           </div>
         </div>
         <button
@@ -29,7 +32,7 @@ const ParticipantCard = ({ participant, totalAmount, itemCount, onRemove }) => {
         </div>
         <div>
           <p className="text-xs text-muted-foreground mb-1">Total Amount</p>
-          <p className="text-lg font-bold text-primary">${totalAmount?.toFixed(2)}</p>
+          <p className="text-lg font-bold text-primary">{currency}{totalAmount?.toFixed(2)}</p>
         </div>
       </div>
     </div>
@@ -40,11 +43,12 @@ ParticipantCard.propTypes = {
   participant: PropTypes?.shape({
     id: PropTypes?.string?.isRequired,
     name: PropTypes?.string?.isRequired,
-    email: PropTypes?.string?.isRequired
+    contact: PropTypes?.string?.isRequired
   })?.isRequired,
   totalAmount: PropTypes?.number?.isRequired,
   itemCount: PropTypes?.number?.isRequired,
-  onRemove: PropTypes?.func?.isRequired
+  onRemove: PropTypes?.func?.isRequired,
+  currency: PropTypes?.string
 };
 
 export default ParticipantCard;

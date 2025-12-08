@@ -4,7 +4,7 @@ import { useState } from 'react';
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
 
-const SubscriptionCard = ({ subscription, onEdit, onCancel, onViewHistory }) => {
+const SubscriptionCard = ({ subscription, onEdit, onCancel }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const getDaysUntilRenewal = () => {
@@ -131,13 +131,6 @@ const SubscriptionCard = ({ subscription, onEdit, onCancel, onViewHistory }) => 
               <span>Edit</span>
             </button>
             <button
-              onClick={() => onViewHistory(subscription)}
-              className="flex items-center space-x-2 px-3 py-2 bg-muted text-foreground rounded-md text-sm font-medium hover:bg-muted/80 transition-quick"
-            >
-              <Icon name="ClockIcon" size={16} variant="outline" />
-              <span>History</span>
-            </button>
-            <button
               onClick={() => onCancel(subscription)}
               className="flex items-center space-x-2 px-3 py-2 bg-destructive text-destructive-foreground rounded-md text-sm font-medium hover:bg-destructive/90 transition-quick"
             >
@@ -166,8 +159,7 @@ SubscriptionCard.propTypes = {
     description: PropTypes?.string
   })?.isRequired,
   onEdit: PropTypes?.func?.isRequired,
-  onCancel: PropTypes?.func?.isRequired,
-  onViewHistory: PropTypes?.func?.isRequired
+  onCancel: PropTypes?.func?.isRequired
 };
 
 export default SubscriptionCard;

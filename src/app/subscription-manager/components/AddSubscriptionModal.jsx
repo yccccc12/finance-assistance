@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import PropTypes from 'prop-types';
 import Icon from '@/components/ui/AppIcon';
+import { speechToText, parseSubscription } from '@/services/transactionApi';
 
 const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
   const [formData, setFormData] = useState({
@@ -15,6 +16,17 @@ const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
   });
 
   const [errors, setErrors] = useState({});
+
+  // Voice input state
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcribedText, setTranscribedText] = useState('');
+  const [parsedSubscription, setParsedSubscription] = useState(null);
+  const [showTranscriptionConfirmation, setShowTranscriptionConfirmation] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isParsing, setIsParsing] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   const categories = [
     'Entertainment',
@@ -62,6 +74,130 @@ const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
     return Object.keys(newErrors)?.length === 0;
   };
 
+  // Voice input handlers
+  const startRecording = async () => {
+    try {
+      setVoiceError('');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        
+        if (audioChunksRef.current.length === 0) {
+          setVoiceError('No audio recorded. Please try again.');
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
+        await processAudio(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setVoiceError('Failed to access microphone. Please check permissions.');
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const processAudio = async (audioBlob) => {
+    try {
+      setIsTranscribing(true);
+      setVoiceError('');
+      
+      // Step 1: Transcribe audio to text
+      const sttResult = await speechToText(audioBlob);
+      
+      if (!sttResult?.text) {
+        setVoiceError('No text was transcribed. Please try again.');
+        return;
+      }
+
+      setTranscribedText(sttResult.text);
+      setIsTranscribing(false);
+      setIsParsing(true);
+
+      // Step 2: Parse subscription data using AI
+      try {
+        const parsedData = await parseSubscription(sttResult.text);
+        setParsedSubscription(parsedData);
+        setShowTranscriptionConfirmation(true);
+      } catch (parseError) {
+        console.error('Error parsing subscription:', parseError);
+        setVoiceError('Failed to parse subscription. Please try again.');
+        setParsedSubscription(null);
+        setShowTranscriptionConfirmation(true);
+      }
+    } catch (error) {
+      console.error('Error transcribing audio:', error);
+      setVoiceError(error?.message || 'Failed to transcribe audio. Please try again.');
+    } finally {
+      setIsTranscribing(false);
+      setIsParsing(false);
+      audioChunksRef.current = [];
+    }
+  };
+
+  const handleConfirmTranscription = () => {
+    if (parsedSubscription) {
+      // Auto-fill form with parsed data
+      setFormData(prev => ({
+        ...prev,
+        serviceName: parsedSubscription.serviceName || transcribedText,
+        cost: parsedSubscription.cost?.toString() || prev.cost,
+        billingFrequency: parsedSubscription.billingFrequency || prev.billingFrequency,
+        nextPaymentDate: parsedSubscription.nextPaymentDate || prev.nextPaymentDate,
+        category: parsedSubscription.category || prev.category,
+        description: parsedSubscription.description || prev.description
+      }));
+      
+      // Clear errors
+      setErrors({});
+    } else if (transcribedText) {
+      // Fallback: just fill service name if parsing failed
+      setFormData(prev => ({
+        ...prev,
+        serviceName: transcribedText
+      }));
+      if (errors?.serviceName) {
+        setErrors(prev => ({ ...prev, serviceName: '' }));
+      }
+    }
+    
+    // Reset state
+    setTranscribedText('');
+    setParsedSubscription(null);
+    setShowTranscriptionConfirmation(false);
+    setVoiceError('');
+  };
+
+  const handleCancelTranscription = () => {
+    setTranscribedText('');
+    setParsedSubscription(null);
+    setShowTranscriptionConfirmation(false);
+    setVoiceError('');
+  };
+
   const handleSubmit = (e) => {
     e?.preventDefault();
 
@@ -79,6 +215,10 @@ const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
         description: ''
       });
       setErrors({});
+      // Reset voice input state
+      setTranscribedText('');
+      setParsedSubscription(null);
+      setShowTranscriptionConfirmation(false);
     }
   };
 
@@ -86,7 +226,7 @@ const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
 
   return (
     <div className="fixed inset-0 z-1030 flex items-center justify-center p-4 bg-black/50 animate-fade-in">
-      <div className="bg-card border border-border rounded-lg shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="bg-card border border-border rounded-lg shadow-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-border">
           <h2 className="text-xl font-semibold text-foreground">Add New Subscription</h2>
@@ -106,21 +246,161 @@ const AddSubscriptionModal = ({ isOpen, onClose, onAdd }) => {
             <label htmlFor="serviceName" className="block text-sm font-medium text-foreground mb-2">
               Service Name *
             </label>
-            <input
-              type="text"
-              id="serviceName"
-              name="serviceName"
-              value={formData?.serviceName}
-              onChange={handleChange}
-              className={`w-full px-4 py-2 border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-quick ${
-                errors?.serviceName ? 'border-error' : 'border-input'
-              }`}
-              placeholder="e.g., Netflix, Spotify"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                id="serviceName"
+                name="serviceName"
+                value={formData?.serviceName}
+                onChange={handleChange}
+                className={`w-full px-4 py-2 pr-16 border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-quick ${
+                  errors?.serviceName ? 'border-error' : 'border-input'
+                }`}
+                placeholder="e.g., Netflix, Spotify"
+              />
+              {/* Voice Input Button */}
+              <button
+                type="button"
+                onClick={isRecording ? stopRecording : startRecording}
+                disabled={isTranscribing}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 px-4 py-2 rounded-full transition-quick ${
+                  isRecording
+                    ? 'bg-destructive text-white animate-pulse'
+                    : isTranscribing
+                    ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                }`}
+                aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
+                title={isRecording ? 'Stop recording' : 'Use voice input'}
+              >
+                <Icon
+                  name={isRecording ? 'StopIcon' : 'MicrophoneIcon'}
+                  size={18}
+                  variant="solid"
+                />
+              </button>
+            </div>
             {errors?.serviceName && (
               <p className="text-error text-sm mt-1">{errors?.serviceName}</p>
             )}
+            {voiceError && (
+              <p className="text-error text-sm mt-1">{voiceError}</p>
+            )}
+            {isRecording && (
+              <p className="text-primary text-sm mt-1 flex items-center">
+                <Icon name="MicrophoneIcon" size={14} variant="solid" className="mr-1 animate-pulse" />
+                Recording... Click the microphone again to stop
+              </p>
+            )}
+            {isTranscribing && (
+              <p className="text-primary text-sm mt-1 flex items-center">
+                <Icon name="ArrowPathIcon" size={14} variant="solid" className="mr-1 animate-spin" />
+                Transcribing audio...
+              </p>
+            )}
+            {isParsing && (
+              <p className="text-primary text-sm mt-1 flex items-center">
+                <Icon name="ArrowPathIcon" size={14} variant="solid" className="mr-1 animate-spin" />
+                Processing with AI...
+              </p>
+            )}
           </div>
+
+          {/* Transcription Confirmation Modal */}
+          {showTranscriptionConfirmation && transcribedText && (
+            <div className="p-4 bg-muted rounded-lg border border-border">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center space-x-2">
+                  <Icon name="MicrophoneIcon" size={20} variant="solid" className="text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {parsedSubscription ? 'Subscription Detected' : 'Transcribed Text'}
+                  </h3>
+                </div>
+              </div>
+              
+              {/* Show original transcription */}
+              <div className="bg-background p-3 rounded-md border border-border mb-3">
+                <p className="text-xs text-muted-foreground mb-1">You said:</p>
+                <p className="text-sm text-foreground italic">"{transcribedText}"</p>
+              </div>
+
+              {/* Show parsed subscription data */}
+              {parsedSubscription && (
+                <div className="bg-background p-4 rounded-md border border-border mb-3 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground mb-2">Detected Subscription:</p>
+                  
+                  {parsedSubscription.serviceName && (
+                    <div className="flex items-center space-x-2">
+                      <Icon name="TagIcon" size={14} variant="outline" className="text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Service:</span>
+                      <span className="text-sm text-foreground font-medium">{parsedSubscription.serviceName}</span>
+                    </div>
+                  )}
+                  
+                  {parsedSubscription.cost && (
+                    <div className="flex items-center space-x-2">
+                      <Icon name="CurrencyDollarIcon" size={14} variant="outline" className="text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Cost:</span>
+                      <span className="text-sm text-foreground font-medium">${parsedSubscription.cost.toFixed(2)}</span>
+                    </div>
+                  )}
+                  
+                  {parsedSubscription.billingFrequency && (
+                    <div className="flex items-center space-x-2">
+                      <Icon name="ArrowPathIcon" size={14} variant="outline" className="text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Frequency:</span>
+                      <span className="text-sm text-foreground font-medium capitalize">{parsedSubscription.billingFrequency}</span>
+                    </div>
+                  )}
+                  
+                  {parsedSubscription.nextPaymentDate && (
+                    <div className="flex items-center space-x-2">
+                      <Icon name="CalendarIcon" size={14} variant="outline" className="text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Next Payment:</span>
+                      <span className="text-sm text-foreground font-medium">{parsedSubscription.nextPaymentDate}</span>
+                    </div>
+                  )}
+                  
+                  {parsedSubscription.category && (
+                    <div className="flex items-center space-x-2">
+                      <Icon name="TagIcon" size={14} variant="outline" className="text-muted-foreground" />
+                      <span className="text-xs text-muted-foreground">Category:</span>
+                      <span className="text-sm text-foreground font-medium">{parsedSubscription.category}</span>
+                    </div>
+                  )}
+
+                  {parsedSubscription.description && (
+                    <div className="flex items-start space-x-2">
+                      <Icon name="DocumentTextIcon" size={14} variant="outline" className="text-muted-foreground mt-0.5" />
+                      <div className="flex-1">
+                        <span className="text-xs text-muted-foreground">Description: </span>
+                        <span className="text-sm text-foreground">{parsedSubscription.description}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleConfirmTranscription}
+                  className="flex-1 bg-primary text-primary-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-quick flex items-center justify-center space-x-2"
+                >
+                  <Icon name="CheckCircleIcon" size={16} variant="solid" />
+                  <span>{parsedSubscription ? 'Confirm & Fill Form' : 'Use This Text'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelTranscription}
+                  className="flex-1 bg-muted text-foreground px-4 py-2 rounded-md text-sm font-medium hover:bg-muted/80 transition-quick flex items-center justify-center space-x-2 border border-border"
+                >
+                  <Icon name="XMarkIcon" size={16} variant="solid" />
+                  <span>Cancel</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Cost */}
           <div>

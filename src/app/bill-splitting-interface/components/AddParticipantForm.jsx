@@ -8,7 +8,7 @@ const AddParticipantForm = ({ onAdd }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
-    email: ''
+    contact: ''
   });
 
   const handleChange = (e) => {
@@ -20,9 +20,9 @@ const AddParticipantForm = ({ onAdd }) => {
 
   const handleSubmit = (e) => {
     e?.preventDefault();
-    if (formData?.name?.trim() && formData?.email?.trim()) {
+    if (formData?.name?.trim() && formData?.contact?.trim()) {
       onAdd(formData);
-      setFormData({ name: '', email: '' });
+      setFormData({ name: '', contact: '' });
       setIsOpen(false);
     }
   };
@@ -67,16 +67,16 @@ const AddParticipantForm = ({ onAdd }) => {
         />
       </div>
       <div>
-        <label htmlFor="email" className="block text-sm font-medium text-foreground mb-1">
-          Email
+        <label htmlFor="contact" className="block text-sm font-medium text-foreground mb-1">
+          Contact (Phone/WhatsApp)
         </label>
         <input
-          type="email"
-          id="email"
-          name="email"
-          value={formData?.email}
+          type="tel"
+          id="contact"
+          name="contact"
+          value={formData?.contact}
           onChange={handleChange}
-          placeholder="Enter email"
+          placeholder="e.g., +60123456789"
           className="w-full px-3 py-2 bg-background border border-input rounded-md text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           required
         />
