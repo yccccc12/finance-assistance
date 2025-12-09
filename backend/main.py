@@ -1,51 +1,54 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+# ============================================================================
+# IMPORTS
+# ============================================================================
+# Standard library imports
+import os
+import sys
+import json
+import asyncio
+import tempfile
+import logging
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-
 from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse
-import structlog
-import logging
-from datetime import datetime
-from typing import Optional
-import sys
 
+# Third-party imports
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
+import structlog
+import anthropic
+from elevenlabs import ElevenLabs
+from receipt_ocr.processors import ReceiptProcessor
+from receipt_ocr.providers import OpenAIProvider
+
+# Local imports
 from config import get_settings
 from models.schemas import (
-    ReceiptUploadResponse, 
-    ErrorResponse, 
+    ReceiptUploadResponse,
+    ErrorResponse,
     HealthCheckResponse,
     ReceiptData,
     ReceiptItem
 )
 
-import os
-import json
-from pathlib import Path
-import tempfile
-import asyncio
-from receipt_ocr.processors import ReceiptProcessor
-from receipt_ocr.providers import OpenAIProvider
-
-from elevenlabs import ElevenLabs
-import anthropic
-
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import SQLAlchemyError
-
-from dotenv import load_dotenv
-
+# ============================================================================
+# CONFIGURATION & SETUP
+# ============================================================================
 # Load environment variables
 load_dotenv()
 
-# Configuration
+# Environment variables
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
-# Database Configuration
+# Database configuration
 TIDB_HOST = os.getenv("TIDB_HOST")
 TIDB_PORT = os.getenv("TIDB_PORT")
 TIDB_USERNAME = os.getenv("TIDB_USERNAME")
@@ -73,14 +76,13 @@ logger = structlog.get_logger(__name__)
 # Get settings
 settings = get_settings()
 
-# Create database engine
+# ============================================================================
+# DATABASE SETUP
+# ============================================================================
 engine = None
 SessionLocal = None
 
-
-
 try:
-    # Create engine with SSL configuration for TiDB Cloud
     connect_args = {
         "ssl": {
             "ssl_mode": "VERIFY_IDENTITY"
@@ -99,24 +101,59 @@ try:
 except Exception as e:
     print(f"⚠️ Warning: Database connection failed: {e}")
 
-# Set up Claude Client
+# ============================================================================
+# CLIENT INITIALIZATION
+# ============================================================================
+# Claude client
 claude_client = None
 if ANTHROPIC_API_KEY is None:
     print("Warning: ANTHROPIC API key not configured.")
 else:
     claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# Set up ElevenLabs client
+# ElevenLabs client
 elevenlabs_client = None
 if ELEVENLABS_API_KEY is None:
     print("Warning: ELEVENLABS API key not configured.")
 else:
     elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
+# Receipt OCR initialization
+receipt_ocr_api_key = settings.receipt_ocr_api_key
+receipt_ocr_base_url = settings.receipt_ocr_base_url
+receipt_ocr_model = settings.receipt_ocr_model
+
+receipt_ocr_provider = None
+receipt_ocr_processor = None
+
+if receipt_ocr_api_key:
+    try:
+        is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
+        groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+        is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
+        
+        if is_groq_text_only:
+            logger.warning(
+                "groq_vision_not_supported",
+                message=f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. receipt-ocr requires vision models. "
+                        f"Consider using 'meta-llama/llama-4-scout-17b-16e-instruct' for Groq or OpenAI (gpt-4o)."
+            )
+
+        receipt_ocr_provider = OpenAIProvider(
+            api_key=receipt_ocr_api_key,
+            base_url=receipt_ocr_base_url if receipt_ocr_base_url else None
+        )
+        receipt_ocr_processor = ReceiptProcessor(receipt_ocr_provider)
+        logger.info("receipt_ocr_initialized", model=receipt_ocr_model, is_groq=is_groq)
+    except Exception as e:
+        logger.error("receipt_ocr_init_error", error=str(e))
+
+# ============================================================================
+# FASTAPI APP & MIDDLEWARE
+# ============================================================================
 app = FastAPI(title="Hackathon RAG API")
 
-# Configure CORS to allow frontend requests (simple wildcard, no credentials)
-# Note: Browsers block wildcard + credentials, and our fetch calls do not send credentials.
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -130,19 +167,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add request logging middleware
+# Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     response = await call_next(request)
-    # Force CORS header when origin is present (belt-and-suspenders)
     origin = request.headers.get("origin")
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Vary"] = "Origin"
     return response
 
-
-# Helper function to get database session
+# ============================================================================
+# DEPENDENCIES
+# ============================================================================
 def get_db():
     """Dependency to get database session"""
     if SessionLocal is None:
@@ -153,7 +190,10 @@ def get_db():
     finally:
         db.close()
 
-# PyDantic models for the API endpoints
+# ============================================================================
+# PYDANTIC MODELS
+# ============================================================================
+# AI Chat Models
 class ChatRequest(BaseModel):
     message: str
 
@@ -166,6 +206,7 @@ class STTResponse(BaseModel):
     text: str
     language: Optional[str] = None
 
+# Transaction Models
 class ParseTransactionRequest(BaseModel):
     text: str
 
@@ -175,17 +216,6 @@ class ParseTransactionResponse(BaseModel):
     date: Optional[str] = None  # ISO format date string
     category: Optional[str] = None  # One of: food, transport, entertainment, healthcare, shopping, education, savings, other
     transaction_type: Optional[str] = None  # "income" or "expense"
-
-class ParseSubscriptionRequest(BaseModel):
-    text: str
-
-class ParseSubscriptionResponse(BaseModel):
-    serviceName: str
-    cost: Optional[float] = None
-    billingFrequency: Optional[str] = None  # One of: monthly, quarterly, yearly
-    nextPaymentDate: Optional[str] = None  # ISO format date string
-    category: Optional[str] = None  # One of: Entertainment, Productivity, Health & Fitness, Education, Shopping, Utilities, Other
-    description: Optional[str] = None
 
 class TransactionBase(BaseModel):
     user_id: int
@@ -213,6 +243,18 @@ class TransactionOut(TransactionBase):
         "from_attributes": True
     }
 
+# Subscription Models
+class ParseSubscriptionRequest(BaseModel):
+    text: str
+
+class ParseSubscriptionResponse(BaseModel):
+    serviceName: str
+    cost: Optional[float] = None
+    billingFrequency: Optional[str] = None  # One of: monthly, quarterly, yearly
+    nextPaymentDate: Optional[str] = None  # ISO format date string
+    category: Optional[str] = None  # One of: Entertainment, Productivity, Health & Fitness, Education, Shopping, Utilities, Other
+    description: Optional[str] = None
+
 class SubscriptionBase(BaseModel):
     service_name: str
     cost: float
@@ -237,16 +279,414 @@ class SubscriptionOut(SubscriptionBase):
         "from_attributes": True
     }
 
+# Dashboard Models
+class DashboardMetrics(BaseModel):
+    title: str
+    value: str
+    change: Optional[str] = None
+    changeType: Optional[str] = None  # 'positive', 'negative', 'neutral'
+    icon: str
+    iconColor: str
 
+class DashboardTransaction(BaseModel):
+    id: int
+    description: str
+    amount: float
+    date: str  # MM/DD/YYYY format
+    category: str
+    type: str  # 'income' or 'expense'
+
+class DashboardRenewal(BaseModel):
+    id: int
+    name: str
+    amount: float
+    renewalDate: str  # MM/DD/YYYY format
+    daysUntil: int
+
+class CategorySpending(BaseModel):
+    name: str
+    value: float
+    percentage: float
+
+class CashFlowData(BaseModel):
+    month: str
+    income: float
+    expenses: float
+
+class QuickAction(BaseModel):
+    title: str
+    description: str
+    icon: str
+    iconColor: str
+    href: str
+
+class DashboardResponse(BaseModel):
+    metrics: List[DashboardMetrics]
+    cashFlowData: List[CashFlowData]
+    recentTransactions: List[DashboardTransaction]
+    upcomingRenewals: List[DashboardRenewal]
+    categorySpending: List[CategorySpending]
+    quickActions: List[QuickAction]
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+def get_current_malaysia_time():
+    """Get current date and time in Malaysia timezone"""
+    import pytz
+    malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
+    return datetime.now(malaysia_tz)
+
+def get_all_transactions_data(db: Session):
+    """Fetch all transactions from the database and return them as a list of dicts"""
+    rows = db.execute(
+        text("SELECT * FROM transactions ORDER BY purchase_date DESC")
+    ).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+def get_all_subscription_data(db: Session):
+    """Fetch all subscriptions from the database and return them as a list of dicts"""
+    rows = db.execute(
+        text("SELECT * FROM subscriptions ORDER BY payment_date DESC")
+    ).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+def _compute_dashboard_metrics(db: Session):
+    """
+    Internal function to compute dashboard metrics.
+    Returns raw data that can be used by both the dashboard endpoint and AI endpoint.
+    """
+    from datetime import timedelta
+    from collections import defaultdict
+    from decimal import Decimal
+    
+    current_date = get_current_malaysia_time()
+    
+    def to_float(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, Decimal):
+            return float(value)
+        return float(value)
+    
+    def parse_date(date_value):
+        if date_value is None:
+            return None
+        if isinstance(date_value, datetime):
+            dt = date_value
+        elif isinstance(date_value, str):
+            try:
+                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+            except:
+                try:
+                    dt = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S')
+                except:
+                    return None
+        else:
+            return None
+        
+        import pytz
+        malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
+        if dt.tzinfo is None:
+            dt = malaysia_tz.localize(dt)
+        else:
+            dt = dt.astimezone(malaysia_tz)
+        
+        return dt
+    
+    transactions_rows = db.execute(
+        text("SELECT * FROM transactions ORDER BY purchase_date DESC")
+    ).fetchall()
+    transactions = [dict(row._mapping) for row in transactions_rows]
+    
+    subscriptions_rows = db.execute(
+        text("SELECT * FROM subscriptions ORDER BY payment_date ASC")
+    ).fetchall()
+    subscriptions = [dict(row._mapping) for row in subscriptions_rows]
+    
+    total_income = sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'income')
+    total_expenses = abs(sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'expense'))
+    current_balance = total_income - total_expenses
+    
+    current_month_start = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_expenses = 0.0
+    monthly_income = 0.0
+    
+    for t in transactions:
+        if t.get('transaction_type') == 'expense':
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date and purchase_date >= current_month_start:
+                monthly_expenses += abs(to_float(t.get('amount', 0)))
+        elif t.get('transaction_type') == 'income':
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date and purchase_date >= current_month_start:
+                monthly_income += to_float(t.get('amount', 0))
+    
+    savings_rate = ((monthly_income - monthly_expenses) / monthly_income * 100) if monthly_income > 0 else 0.0
+    
+    category_map = {
+        'food': 'Food & Dining',
+        'transport': 'Transportation',
+        'entertainment': 'Entertainment',
+        'healthcare': 'Healthcare',
+        'shopping': 'Shopping',
+        'education': 'Education',
+        'savings': 'Savings',
+        'other': 'Other'
+    }
+    
+    category_totals = defaultdict(float)
+    for t in transactions:
+        purchase_date = parse_date(t.get('purchase_date'))
+        if purchase_date and purchase_date >= current_month_start and t.get('transaction_type') == 'expense':
+            category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
+            category_totals[category] += abs(to_float(t.get('amount', 0)))
+    
+    seven_days_later = current_date + timedelta(days=7)
+    upcoming_renewals = []
+    
+    for sub in subscriptions:
+        payment_date = parse_date(sub.get('payment_date'))
+        if payment_date and current_date <= payment_date <= seven_days_later:
+            days_until = (payment_date - current_date).days
+            upcoming_renewals.append({
+                'id': sub.get('subscription_id', 0),
+                'name': sub.get('service_name', 'Unknown'),
+                'amount': to_float(sub.get('cost', 0)),
+                'days_until': days_until,
+                'date': payment_date.strftime("%m/%d/%Y")
+            })
+    
+    return {
+        'transactions': transactions,
+        'subscriptions': subscriptions,
+        'current_balance': current_balance,
+        'monthly_income': monthly_income,
+        'monthly_expenses': monthly_expenses,
+        'savings_rate': savings_rate,
+        'category_totals': category_totals,
+        'category_map': category_map,
+        'upcoming_renewals': upcoming_renewals,
+        'current_date': current_date,
+        'current_month_start': current_month_start,
+        'to_float': to_float,
+        'parse_date': parse_date
+    }
+
+def get_dashboard_data_for_ai(db: Session):
+    """Get dashboard data formatted for AI consumption"""
+    try:
+        data = _compute_dashboard_metrics(db)
+        
+        return {
+            'current_balance': data['current_balance'],
+            'monthly_income': data['monthly_income'],
+            'monthly_expenses': data['monthly_expenses'],
+            'savings_rate': data['savings_rate'],
+            'category_breakdown': dict(sorted(data['category_totals'].items(), key=lambda x: x[1], reverse=True)),
+            'upcoming_renewals': [
+                {
+                    'name': r['name'],
+                    'amount': r['amount'],
+                    'days_until': r['days_until'],
+                    'date': r['date']
+                }
+                for r in data['upcoming_renewals']
+            ],
+            'total_subscriptions': len(data['subscriptions']),
+            'recent_transactions_count': len(data['transactions'][:5])
+        }
+    except Exception as e:
+        logger.error(f"Error getting dashboard data for AI: {e}")
+        return None
+
+# Receipt OCR helper functions
+async def process_receipt_with_ocr(file_content: bytes, filename: str, content_type: str) -> Dict[str, Any]:
+    """Process a receipt image using receipt-ocr library"""
+    if not receipt_ocr_api_key:
+        raise ValueError(
+            "Receipt OCR API key is not configured. Set RECEIPT_OCR_API_KEY in your environment or .env file."
+        )
+    
+    if not receipt_ocr_processor:
+        raise ValueError(
+            "Receipt OCR processor is not initialized. Check your API key and configuration."
+        )
+    
+    is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
+    groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+    is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
+    
+    if is_groq_text_only:
+        raise ValueError(
+            f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. The receipt-ocr library requires vision models.\n"
+            "Options:\n"
+            "1. Use Groq's vision model: set RECEIPT_OCR_MODEL=meta-llama/llama-4-scout-17b-16e-instruct\n"
+            "2. Use OpenAI (gpt-4o) which supports vision - set RECEIPT_OCR_BASE_URL to https://api.openai.com/v1 or leave empty\n"
+            "3. Use a hybrid approach with local OCR (Tesseract) + Groq for text processing\n"
+            f"Current model: {receipt_ocr_model}"
+        )
+    
+    logger.info(
+        "processing_receipt",
+        filename=filename,
+        content_type=content_type,
+        file_size=len(file_content),
+        model=receipt_ocr_model
+    )
+    
+    start_time = datetime.utcnow()
+    
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp_file:
+            tmp_file.write(file_content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            json_schema = {
+                "merchant_name": "string",
+                "merchant_address": "string",
+                "transaction_date": "string",
+                "transaction_time": "string",
+                "total_amount": "number",
+                "subtotal_amount": "number",
+                "tax_amount": "number",
+                "tip_amount": "number",
+                "currency": "string",
+                "payment_method": "string",
+                "merchant_phone": "string",
+                "line_items": [
+                    {
+                        "item_name": "string",
+                        "item_quantity": "number",
+                        "item_price": "number",
+                        "item_total": "number"
+                    }
+                ]
+            }
+            
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: receipt_ocr_processor.process_receipt(
+                    tmp_file_path,
+                    json_schema,
+                    receipt_ocr_model,
+                    response_format_type="json_object"
+                )
+            )
+            
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            
+            logger.info(
+                "receipt_processed_successfully",
+                filename=filename,
+                processing_time=processing_time
+            )
+            
+            return result
+            
+        finally:
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+                
+    except Exception as e:
+        logger.error("receipt_ocr_processing_error", filename=filename, error=str(e))
+        raise ValueError(f"Error processing receipt: {str(e)}")
+
+def parse_receipt_response(receipt_data: Dict[str, Any]) -> ReceiptData:
+    """Parse receipt-ocr response into our ReceiptData model"""
+    try:
+        merchant_name = receipt_data.get('merchant_name') or 'Unknown'
+        
+        total_amount = float(receipt_data.get('total_amount', 0.0))
+        subtotal = receipt_data.get('subtotal_amount')
+        subtotal = float(subtotal) if subtotal is not None else None
+        
+        tax = receipt_data.get('tax_amount')
+        tax = float(tax) if tax is not None else None
+        
+        tip = receipt_data.get('tip_amount')
+        tip = float(tip) if tip is not None else None
+        
+        receipt_date = receipt_data.get('transaction_date')
+        receipt_time = receipt_data.get('transaction_time')
+        
+        items = []
+        line_items = receipt_data.get('line_items', [])
+        for item in line_items:
+            try:
+                item_name = item.get('item_name', 'Unknown Item')
+                item_price = float(item.get('item_price', 0.0))
+                item_quantity = int(item.get('item_quantity', 1))
+                
+                if item_name and item_price > 0:
+                    items.append(ReceiptItem(
+                        name=item_name,
+                        price=item_price,
+                        quantity=item_quantity,
+                        category=None
+                    ))
+            except (ValueError, TypeError) as e:
+                logger.warning("error_parsing_line_item", item=item, error=str(e))
+                continue
+        
+        currency = receipt_data.get('currency', 'USD')
+        payment_method = receipt_data.get('payment_method')
+        address = receipt_data.get('merchant_address')
+        phone = receipt_data.get('merchant_phone')
+        
+        receipt_data_obj = ReceiptData(
+            store_name=merchant_name,
+            total_amount=total_amount,
+            subtotal=subtotal,
+            tax=tax,
+            tip=tip,
+            date=receipt_date,
+            time=receipt_time,
+            items=items,
+            currency=currency,
+            payment_method=payment_method,
+            address=address,
+            phone=phone,
+            confidence=None
+        )
+        
+        logger.info(
+            "receipt_response_parsed",
+            merchant=merchant_name,
+            total=total_amount,
+            items_count=len(items)
+        )
+        
+        return receipt_data_obj
+        
+    except Exception as e:
+        logger.error("error_parsing_receipt_response", error=str(e))
+        return ReceiptData(
+            store_name="Unknown",
+            total_amount=0.0,
+            items=[]
+        )
+
+async def check_receipt_ocr_health() -> bool:
+    """Check if Receipt OCR is accessible and properly configured"""
+    try:
+        return bool(receipt_ocr_api_key and receipt_ocr_processor is not None)
+    except Exception as e:
+        logger.error("health_check_failed", error=str(e))
+        return False
+
+# ============================================================================
+# ENDPOINTS - TRANSACTIONS
+# ============================================================================
 @app.post("/transactions", response_model=TransactionOut, tags=["Transaction"])
 def create_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
     try:
-        # Validate transaction_type
         transaction_type = data.transaction_type or "expense"
         if transaction_type not in ["income", "expense"]:
             transaction_type = "expense"
         
-        # Capitalize description (first letter uppercase)
         description = data.description.strip() if data.description else ""
         if description:
             description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
@@ -274,7 +714,7 @@ def create_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.get("/transactions", response_model=List[TransactionOut], tags=["Transaction"])
 def get_all_transactions(db: Session = Depends(get_db)):
     rows = db.execute(text("SELECT * FROM transactions ORDER BY purchase_date DESC")).fetchall()
@@ -299,12 +739,10 @@ def update_transaction(transaction_id: int, update: TransactionUpdate, db: Sessi
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update.")
     
-    # Validate transaction_type if provided
     if 'transaction_type' in updates:
         if updates['transaction_type'] not in ["income", "expense"]:
             updates['transaction_type'] = "expense"
     
-    # Capitalize description if provided (first letter uppercase)
     if 'description' in updates and updates['description']:
         description = updates['description'].strip()
         if description:
@@ -340,6 +778,9 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
 
     return {"message": "Transaction deleted successfully"}
 
+# ============================================================================
+# ENDPOINTS - SUBSCRIPTIONS
+# ============================================================================
 @app.post("/subscriptions", response_model=SubscriptionOut, tags=["Subscription"])
 def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db)):
     try:
@@ -363,7 +804,7 @@ def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db))
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.get("/subscriptions", response_model=List[SubscriptionOut], tags=["Subscription"])
 def get_all_subscriptions(db: Session = Depends(get_db)):
     rows = db.execute(text("SELECT * FROM subscriptions ORDER BY payment_date DESC")).fetchall()
@@ -418,246 +859,9 @@ def delete_subscription(subscription_id: int, db: Session = Depends(get_db)):
 
     return {"message": "Subscription deleted successfully"}
 
-# Dashboard endpoint models
-class DashboardMetrics(BaseModel):
-    title: str
-    value: str
-    change: Optional[str] = None
-    changeType: Optional[str] = None  # 'positive', 'negative', 'neutral'
-    icon: str
-    iconColor: str
-
-class DashboardTransaction(BaseModel):
-    id: int
-    description: str
-    amount: float
-    date: str  # MM/DD/YYYY format
-    category: str
-    type: str  # 'income' or 'expense'
-
-class DashboardRenewal(BaseModel):
-    id: int
-    name: str
-    amount: float
-    renewalDate: str  # MM/DD/YYYY format
-    daysUntil: int
-
-class CategorySpending(BaseModel):
-    name: str
-    value: float
-    percentage: float
-
-class CashFlowData(BaseModel):
-    month: str
-    income: float
-    expenses: float
-
-class QuickAction(BaseModel):
-    title: str
-    description: str
-    icon: str
-    iconColor: str
-    href: str
-
-class DashboardResponse(BaseModel):
-    metrics: List[DashboardMetrics]
-    cashFlowData: List[CashFlowData]
-    recentTransactions: List[DashboardTransaction]
-    upcomingRenewals: List[DashboardRenewal]
-    categorySpending: List[CategorySpending]
-    quickActions: List[QuickAction]
-
-# Get current date and time in malaysia timezone
-def get_current_malaysia_time():
-    import pytz
-    malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
-    return datetime.now(malaysia_tz)
-
-def get_all_transactions_data(db: Session):
-    """
-    Fetch all transactions from the database and return
-    them as a list of dicts (easy to send to AI models).
-    """
-    rows = db.execute(
-        text("SELECT * FROM transactions ORDER BY purchase_date DESC")
-    ).fetchall()
-
-    transactions = [dict(row._mapping) for row in rows]
-    return transactions
-
-def get_all_subscription_data(db: Session):
-    """
-    Fetch all subscriptions from the database and return
-    them as a list of dicts (easy to send to AI models).
-    """
-    rows = db.execute(
-        text("SELECT * FROM subscriptions ORDER BY payment_date DESC")
-    ).fetchall()
-
-    subscriptions = [dict(row._mapping) for row in rows]
-    return subscriptions
-
-def _compute_dashboard_metrics(db: Session):
-    """
-    Internal function to compute dashboard metrics.
-    Returns raw data that can be used by both the dashboard endpoint and AI endpoint.
-    """
-    from datetime import timedelta
-    from collections import defaultdict
-    from decimal import Decimal
-    
-    current_date = get_current_malaysia_time()
-    
-    # Helper function to convert Decimal to float
-    def to_float(value):
-        if value is None:
-            return 0.0
-        if isinstance(value, Decimal):
-            return float(value)
-        return float(value)
-    
-    # Helper function to parse date and normalize timezone
-    def parse_date(date_value):
-        if date_value is None:
-            return None
-        if isinstance(date_value, datetime):
-            dt = date_value
-        elif isinstance(date_value, str):
-            try:
-                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-            except:
-                try:
-                    dt = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S')
-                except:
-                    return None
-        else:
-            return None
-        
-        # Normalize to timezone-aware datetime (Malaysia timezone)
-        import pytz
-        malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
-        if dt.tzinfo is None:
-            dt = malaysia_tz.localize(dt)
-        else:
-            dt = dt.astimezone(malaysia_tz)
-        
-        return dt
-    
-    # Get all transactions
-    transactions_rows = db.execute(
-        text("SELECT * FROM transactions ORDER BY purchase_date DESC")
-    ).fetchall()
-    transactions = [dict(row._mapping) for row in transactions_rows]
-    
-    # Get all subscriptions
-    subscriptions_rows = db.execute(
-        text("SELECT * FROM subscriptions ORDER BY payment_date ASC")
-    ).fetchall()
-    subscriptions = [dict(row._mapping) for row in subscriptions_rows]
-    
-    # Calculate metrics
-    total_income = sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'income')
-    total_expenses = abs(sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'expense'))
-    current_balance = total_income - total_expenses
-    
-    # Monthly spending (current month)
-    current_month_start = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    monthly_expenses = 0.0
-    monthly_income = 0.0
-    
-    for t in transactions:
-        if t.get('transaction_type') == 'expense':
-            purchase_date = parse_date(t.get('purchase_date'))
-            if purchase_date and purchase_date >= current_month_start:
-                monthly_expenses += abs(to_float(t.get('amount', 0)))
-        elif t.get('transaction_type') == 'income':
-            purchase_date = parse_date(t.get('purchase_date'))
-            if purchase_date and purchase_date >= current_month_start:
-                monthly_income += to_float(t.get('amount', 0))
-    
-    savings_rate = ((monthly_income - monthly_expenses) / monthly_income * 100) if monthly_income > 0 else 0.0
-    
-    # Category spending breakdown
-    category_map = {
-        'food': 'Food & Dining',
-        'transport': 'Transportation',
-        'entertainment': 'Entertainment',
-        'healthcare': 'Healthcare',
-        'shopping': 'Shopping',
-        'education': 'Education',
-        'savings': 'Savings',
-        'other': 'Other'
-    }
-    
-    category_totals = defaultdict(float)
-    for t in transactions:
-        purchase_date = parse_date(t.get('purchase_date'))
-        if purchase_date and purchase_date >= current_month_start and t.get('transaction_type') == 'expense':
-            category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
-            category_totals[category] += abs(to_float(t.get('amount', 0)))
-    
-    # Upcoming renewals (next 7 days)
-    seven_days_later = current_date + timedelta(days=7)
-    upcoming_renewals = []
-    
-    for sub in subscriptions:
-        payment_date = parse_date(sub.get('payment_date'))
-        if payment_date and current_date <= payment_date <= seven_days_later:
-            days_until = (payment_date - current_date).days
-            upcoming_renewals.append({
-                'id': sub.get('subscription_id', 0),
-                'name': sub.get('service_name', 'Unknown'),
-                'amount': to_float(sub.get('cost', 0)),
-                'days_until': days_until,
-                'date': payment_date.strftime("%m/%d/%Y")
-            })
-    
-    return {
-        'transactions': transactions,
-        'subscriptions': subscriptions,
-        'current_balance': current_balance,
-        'monthly_income': monthly_income,
-        'monthly_expenses': monthly_expenses,
-        'savings_rate': savings_rate,
-        'category_totals': category_totals,
-        'category_map': category_map,
-        'upcoming_renewals': upcoming_renewals,
-        'current_date': current_date,
-        'current_month_start': current_month_start,
-        'to_float': to_float,
-        'parse_date': parse_date
-    }
-
-def get_dashboard_data_for_ai(db: Session):
-    """
-    Get dashboard data formatted for AI consumption.
-    Uses the shared dashboard computation logic.
-    """
-    try:
-        data = _compute_dashboard_metrics(db)
-        
-        return {
-            'current_balance': data['current_balance'],
-            'monthly_income': data['monthly_income'],
-            'monthly_expenses': data['monthly_expenses'],
-            'savings_rate': data['savings_rate'],
-            'category_breakdown': dict(sorted(data['category_totals'].items(), key=lambda x: x[1], reverse=True)),
-            'upcoming_renewals': [
-                {
-                    'name': r['name'],
-                    'amount': r['amount'],
-                    'days_until': r['days_until'],
-                    'date': r['date']
-                }
-                for r in data['upcoming_renewals']
-            ],
-            'total_subscriptions': len(data['subscriptions']),
-            'recent_transactions_count': len(data['transactions'][:5])
-        }
-    except Exception as e:
-        logger.error(f"Error getting dashboard data for AI: {e}")
-        return None
-
+# ============================================================================
+# ENDPOINTS - DASHBOARD
+# ============================================================================
 @app.get("/dashboard", response_model=DashboardResponse, tags=["Dashboard"])
 def get_dashboard_data(db: Session = Depends(get_db)):
     """
@@ -668,7 +872,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
         import calendar
         from datetime import timedelta
         
-        # Use shared computation function
         data = _compute_dashboard_metrics(db)
         
         transactions = data['transactions']
@@ -685,10 +888,8 @@ def get_dashboard_data(db: Session = Depends(get_db)):
         to_float = data['to_float']
         parse_date = data['parse_date']
         
-        # Financial health score (simple calculation based on savings rate and spending patterns)
         health_score = min(100, max(0, int(50 + (savings_rate / 2) + (10 if current_balance > 0 else -20))))
         
-        # Format metrics
         metrics = [
             DashboardMetrics(
                 title="Current Balance",
@@ -724,7 +925,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             )
         ]
         
-        # Recent transactions (last 5)
         recent_transactions_list = []
         
         for t in transactions[:5]:
@@ -738,7 +938,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             transaction_type = t.get('transaction_type', 'expense')
             amount = to_float(t.get('amount', 0))
             
-            # For expenses, ensure amount is negative
             if transaction_type == 'expense' and amount > 0:
                 amount = -amount
             
@@ -751,7 +950,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
                 type=transaction_type
             ))
         
-        # Upcoming renewals (already computed in shared function)
         upcoming_renewals_list = [
             DashboardRenewal(
                 id=r['id'],
@@ -763,7 +961,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             for r in upcoming_renewals_data
         ]
         
-        # Category spending (already computed in shared function)
         total_category_spending = sum(category_totals.values())
         category_spending_list = [
             CategorySpending(
@@ -774,10 +971,8 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             for cat, amount in sorted(category_totals.items(), key=lambda x: x[1], reverse=True)
         ]
         
-        # Cash flow data (last 6 months)
         cash_flow_list = []
-        for i in range(5, -1, -1):  # Last 6 months
-            # Calculate month date by subtracting months
+        for i in range(5, -1, -1):
             year = current_date.year
             month = current_date.month - i
             while month <= 0:
@@ -787,11 +982,9 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             month_date = current_date.replace(year=year, month=month, day=1)
             month_start = month_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             
-            # Calculate end of month
             if i == 0:
                 month_end = current_date
             else:
-                # Get last day of the month
                 if month == 12:
                     next_month = month_date.replace(year=year + 1, month=1, day=1)
                 else:
@@ -814,7 +1007,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
                 expenses=month_expenses
             ))
         
-        # Quick actions (static)
         quick_actions_list = [
             QuickAction(
                 title="Add Transaction",
@@ -856,12 +1048,14 @@ def get_dashboard_data(db: Session = Depends(get_db)):
         )
         
     except HTTPException:
-        # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
         logger.error(f"Error fetching dashboard data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard data: {str(e)}")
 
+# ============================================================================
+# ENDPOINTS - AI
+# ============================================================================
 @app.post("/claude", response_model=ChatResponse, tags=["AI"])
 async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     """
@@ -872,10 +1066,8 @@ async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_d
         if claude_client is None:
             return ChatResponse(reply="Claude API key not configured.", contextUsed=False, chunksFound=0)
 
-        # Get dashboard data for AI
         dashboard_data = get_dashboard_data_for_ai(db)
         
-        # Format dashboard data for the prompt
         dashboard_context = ""
         if dashboard_data:
             dashboard_context = f"""
@@ -899,7 +1091,6 @@ async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_d
             
             dashboard_context += f"\n**Total Active Subscriptions:** {dashboard_data['total_subscriptions']}\n"
 
-        # Get recent transactions for context
         recent_transactions = get_all_transactions_data(db)[:10]
         transactions_context = ""
         if recent_transactions:
@@ -960,26 +1151,22 @@ When answering questions:
     except Exception as e:
         logger.error(f"Error in Claude endpoint: {e}")
         return ChatResponse(reply=f"Error generating Claude response: {str(e)}", contextUsed=False, chunksFound=0)
-        
-# Elevenlabs endpoint - Speech to Text
+
 @app.post("/stt", tags=["AI"])
 async def speech_to_text(request: Request):
     try:
-        # Check if ElevenLabs client is available
         if elevenlabs_client is None:
             raise HTTPException(status_code=500, detail="ElevenLabs API key not configured")
 
-        # Read raw binary audio directly from the request body
         audio_bytes = await request.body()
 
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="No audio received")
 
-        # Call ElevenLabs STT
         transcription = elevenlabs_client.speech_to_text.convert(
             file=audio_bytes,
             model_id="scribe_v1",
-            language_code = "eng"
+            language_code="eng"
         )
 
         return {"text": transcription.text}
@@ -987,7 +1174,6 @@ async def speech_to_text(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"STT failed: {e}")
 
-# Parse transaction endpoint using Claude AI
 @app.post("/parse-transaction", response_model=ParseTransactionResponse, tags=["AI"])
 async def parse_transaction(request: ParseTransactionRequest):
     """
@@ -1045,18 +1231,14 @@ async def parse_transaction(request: ParseTransactionRequest):
 
         reply_text = res.content[0].text.strip()
 
-        # Extract JSON from the response (handle markdown code blocks if present)
         try:
-            # Try to parse the entire response as JSON first
             if reply_text.startswith("```"):
-                # Extract JSON from markdown code block
                 json_str = reply_text.split("```json")[-1].split("```")[0].strip()
                 if not json_str:
                     json_str = reply_text.split("```")[1].strip()
             elif reply_text.startswith("{"):
                 json_str = reply_text
             else:
-                # Try to find JSON in the response
                 start_idx = reply_text.find("{")
                 end_idx = reply_text.rfind("}") + 1
                 if start_idx != -1 and end_idx > start_idx:
@@ -1066,9 +1248,7 @@ async def parse_transaction(request: ParseTransactionRequest):
 
             parsed_data = json.loads(json_str)
 
-            # Validate and set defaults
             description = parsed_data.get("description", request.text.strip())
-            # Capitalize description (first letter uppercase)
             if description:
                 description = description.strip()
                 description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
@@ -1076,14 +1256,12 @@ async def parse_transaction(request: ParseTransactionRequest):
             amount = parsed_data.get("amount")
             date = parsed_data.get("date") or date_str
             category = parsed_data.get("category")
-            transaction_type = parsed_data.get("transaction_type", "expense")  # Default to expense
+            transaction_type = parsed_data.get("transaction_type", "expense")
 
-            # Validate category
             valid_categories = ["food", "transport", "entertainment", "healthcare", "shopping", "education", "savings", "other"]
             if category and category not in valid_categories:
                 category = None
 
-            # Validate transaction_type
             if transaction_type not in ["income", "expense"]:
                 transaction_type = "expense"
 
@@ -1095,9 +1273,7 @@ async def parse_transaction(request: ParseTransactionRequest):
                 transaction_type=transaction_type
             )
         except (json.JSONDecodeError, ValueError, KeyError) as e:
-            # Fallback: return basic structure with just description
             logger.error(f"Failed to parse Claude response: {e}", response=reply_text)
-            # Capitalize description (first letter uppercase)
             description = request.text.strip()
             if description:
                 description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
@@ -1107,7 +1283,7 @@ async def parse_transaction(request: ParseTransactionRequest):
                 amount=None,
                 date=date_str,
                 category=None,
-                transaction_type="expense"  # Default to expense on error
+                transaction_type="expense"
             )
 
     except Exception as e:
@@ -1171,7 +1347,6 @@ async def parse_subscription(request: ParseSubscriptionRequest):
 
         reply_text = res.content[0].text.strip()
 
-        # Extract JSON from the response
         try:
             if reply_text.startswith("```"):
                 json_str = reply_text.split("```json")[-1].split("```")[0].strip()
@@ -1189,7 +1364,6 @@ async def parse_subscription(request: ParseSubscriptionRequest):
 
             parsed_data = json.loads(json_str)
 
-            # Validate and set defaults
             service_name = parsed_data.get("serviceName", request.text.strip())
             cost = parsed_data.get("cost")
             billing_frequency = parsed_data.get("billingFrequency", "monthly")
@@ -1197,30 +1371,23 @@ async def parse_subscription(request: ParseSubscriptionRequest):
             category = parsed_data.get("category")
             description = parsed_data.get("description")
 
-            # Validate billing frequency
             valid_frequencies = ["monthly", "quarterly", "yearly"]
             if billing_frequency and billing_frequency not in valid_frequencies:
                 billing_frequency = "monthly"
 
-            # Validate category
             valid_categories = ["Entertainment", "Productivity", "Health & Fitness", "Education", "Shopping", "Utilities", "Other"]
             if category and category not in valid_categories:
                 category = "Other"
 
-            # If next payment date is not provided, default based on billing frequency
             if not next_payment_date:
                 from datetime import timedelta
                 if billing_frequency == "monthly":
-                    # Add approximately 30 days
                     next_payment_date = (current_date + timedelta(days=30)).strftime("%Y-%m-%d")
                 elif billing_frequency == "quarterly":
-                    # Add approximately 90 days
                     next_payment_date = (current_date + timedelta(days=90)).strftime("%Y-%m-%d")
                 elif billing_frequency == "yearly":
-                    # Add approximately 365 days
                     next_payment_date = (current_date + timedelta(days=365)).strftime("%Y-%m-%d")
                 else:
-                    # Default to one month
                     next_payment_date = (current_date + timedelta(days=30)).strftime("%Y-%m-%d")
 
             return ParseSubscriptionResponse(
@@ -1232,7 +1399,6 @@ async def parse_subscription(request: ParseSubscriptionRequest):
                 description=description
             )
         except (json.JSONDecodeError, ValueError, KeyError) as e:
-            # Fallback: return basic structure
             logger.error(f"Failed to parse Claude response: {e}", response=reply_text)
             return ParseSubscriptionResponse(
                 serviceName=request.text.strip(),
@@ -1247,24 +1413,9 @@ async def parse_subscription(request: ParseSubscriptionRequest):
         logger.error(f"Error parsing subscription: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to parse subscription: {str(e)}")
 
-@app.get("/api/health", response_model=HealthCheckResponse, tags=["Health"])
-async def health_check():
-    """
-    Health check endpoint.
-    Returns the status of the API and its dependencies.
-    """
-    receipt_ocr_configured = await check_receipt_ocr_health()
-    
-    logger.info("health_check", receipt_ocr_configured=receipt_ocr_configured)
-    
-    return HealthCheckResponse(
-        status="healthy" if receipt_ocr_configured else "degraded",
-        timestamp=datetime.utcnow(),
-        version="1.0.0",
-        taggun_configured=receipt_ocr_configured  # Keep field name for backward compatibility
-    )
-
-
+# ============================================================================
+# ENDPOINTS - RECEIPT PROCESSING
+# ============================================================================
 @app.post(
     "/api/receipt/process",
     response_model=ReceiptUploadResponse,
@@ -1295,7 +1446,6 @@ async def process_receipt(
         size=file.size if hasattr(file, 'size') else 'unknown'
     )
     
-    # Validate file type
     if file.content_type not in settings.allowed_mime_types:
         logger.warning(
             "invalid_file_type",
@@ -1307,12 +1457,10 @@ async def process_receipt(
             detail=f"Invalid file type. Allowed types: {', '.join(settings.allowed_mime_types)}"
         )
     
-    # Read file content
     try:
         file_content = await file.read()
         file_size = len(file_content)
         
-        # Validate file size
         if file_size > settings.max_upload_size:
             logger.warning(
                 "file_too_large",
@@ -1338,16 +1486,13 @@ async def process_receipt(
             detail=f"Error reading file: {str(e)}"
         )
     
-    # Process receipt with Receipt OCR
     try:
-        # Process receipt using OCR
         receipt_response = await process_receipt_with_ocr(
             file_content=file_content,
             filename=file.filename,
             content_type=file.content_type
         )
         
-        # Parse the response
         receipt_data = parse_receipt_response(receipt_response)
         
         processing_time = (datetime.utcnow() - start_time).total_seconds()
@@ -1391,232 +1536,50 @@ async def process_receipt(
             detail="An unexpected error occurred while processing the receipt"
         )
 
-
-# Initialize Receipt OCR (using receipt-ocr library)
-# Initialize provider and processor
-receipt_ocr_api_key = settings.receipt_ocr_api_key
-receipt_ocr_base_url = settings.receipt_ocr_base_url
-receipt_ocr_model = settings.receipt_ocr_model
-
-receipt_ocr_provider = None
-receipt_ocr_processor = None
-
-if receipt_ocr_api_key:
-    try:
-        # Check if using Groq with a text-only model
-        is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
-        groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
-        is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
+@app.post(
+    "/api/receipt/process-url",
+    response_model=ReceiptUploadResponse,
+    status_code=200,
+    tags=["Receipt Processing"]
+)
+async def process_receipt_from_url(url: str):
+    """
+    Process a receipt from a URL.
+    
+    Args:
+        url: URL of the receipt image
         
-        if is_groq_text_only:
-            logger.warning(
-                "groq_vision_not_supported",
-                message=f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. receipt-ocr requires vision models. "
-                        f"Consider using 'meta-llama/llama-4-scout-17b-16e-instruct' for Groq or OpenAI (gpt-4o)."
-            )
-
-        receipt_ocr_provider = OpenAIProvider(
-            api_key=receipt_ocr_api_key,
-            base_url=receipt_ocr_base_url if receipt_ocr_base_url else None
-        )
-        receipt_ocr_processor = ReceiptProcessor(receipt_ocr_provider)
-        logger.info("receipt_ocr_initialized", model=receipt_ocr_model, is_groq=is_groq)
-    except Exception as e:
-        logger.error("receipt_ocr_init_error", error=str(e))
-
-
-# Receipt OCR helper functions
-async def process_receipt_with_ocr(file_content: bytes, filename: str, content_type: str) -> Dict[str, Any]:
-    """Process a receipt image using receipt-ocr library."""
-    if not receipt_ocr_api_key:
-        raise ValueError(
-            "Receipt OCR API key is not configured. Set RECEIPT_OCR_API_KEY in your environment or .env file."
-        )
-    
-    if not receipt_ocr_processor:
-        raise ValueError(
-            "Receipt OCR processor is not initialized. Check your API key and configuration."
-        )
-    
-    # Check if using Groq with a text-only model
-    is_groq = receipt_ocr_base_url and "groq.com" in receipt_ocr_base_url
-    groq_vision_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
-    is_groq_text_only = is_groq and receipt_ocr_model not in groq_vision_models
-    
-    if is_groq_text_only:
-        raise ValueError(
-            f"Groq model '{receipt_ocr_model}' doesn't support vision/image inputs. The receipt-ocr library requires vision models.\n"
-            "Options:\n"
-            "1. Use Groq's vision model: set RECEIPT_OCR_MODEL=meta-llama/llama-4-scout-17b-16e-instruct\n"
-            "2. Use OpenAI (gpt-4o) which supports vision - set RECEIPT_OCR_BASE_URL to https://api.openai.com/v1 or leave empty\n"
-            "3. Use a hybrid approach with local OCR (Tesseract) + Groq for text processing\n"
-            f"Current model: {receipt_ocr_model}"
-        )
-    
-    logger.info(
-        "processing_receipt",
-        filename=filename,
-        content_type=content_type,
-        file_size=len(file_content),
-        model=receipt_ocr_model
+    Returns:
+        ReceiptUploadResponse containing the extracted receipt data
+    """
+    raise HTTPException(
+        status_code=501,
+        detail="URL processing not yet implemented. Please use file upload."
     )
+
+# ============================================================================
+# ENDPOINTS - HEALTH
+# ============================================================================
+@app.get("/api/health", response_model=HealthCheckResponse, tags=["Health"])
+async def health_check():
+    """
+    Health check endpoint.
+    Returns the status of the API and its dependencies.
+    """
+    receipt_ocr_configured = await check_receipt_ocr_health()
     
-    start_time = datetime.utcnow()
+    logger.info("health_check", receipt_ocr_configured=receipt_ocr_configured)
     
-    try:
-        # Save file content to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp_file:
-            tmp_file.write(file_content)
-            tmp_file_path = tmp_file.name
-        
-        try:
-            # Define JSON schema for extraction
-            json_schema = {
-                "merchant_name": "string",
-                "merchant_address": "string",
-                "transaction_date": "string",
-                "transaction_time": "string",
-                "total_amount": "number",
-                "subtotal_amount": "number",
-                "tax_amount": "number",
-                "tip_amount": "number",
-                "currency": "string",
-                "payment_method": "string",
-                "merchant_phone": "string",
-                "line_items": [
-                    {
-                        "item_name": "string",
-                        "item_quantity": "number",
-                        "item_price": "number",
-                        "item_total": "number"
-                    }
-                ]
-            }
-            
-            # Process the receipt (run in executor since it's synchronous)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: receipt_ocr_processor.process_receipt(
-                    tmp_file_path,
-                    json_schema,
-                    receipt_ocr_model,
-                    response_format_type="json_object"
-                )
-            )
-            
-            processing_time = (datetime.utcnow() - start_time).total_seconds()
-            
-            logger.info(
-                "receipt_processed_successfully",
-                filename=filename,
-                processing_time=processing_time
-            )
-            
-            return result
-            
-        finally:
-            # Clean up temporary file
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-                
-    except Exception as e:
-        logger.error("receipt_ocr_processing_error", filename=filename, error=str(e))
-        raise ValueError(f"Error processing receipt: {str(e)}")
+    return HealthCheckResponse(
+        status="healthy" if receipt_ocr_configured else "degraded",
+        timestamp=datetime.utcnow(),
+        version="1.0.0",
+        taggun_configured=receipt_ocr_configured
+    )
 
-
-def parse_receipt_response(receipt_data: Dict[str, Any]) -> ReceiptData:
-    """Parse receipt-ocr response into our ReceiptData model."""
-    try:
-        # Extract merchant information
-        merchant_name = receipt_data.get('merchant_name') or 'Unknown'
-        
-        # Extract amounts
-        total_amount = float(receipt_data.get('total_amount', 0.0))
-        subtotal = receipt_data.get('subtotal_amount')
-        subtotal = float(subtotal) if subtotal is not None else None
-        
-        tax = receipt_data.get('tax_amount')
-        tax = float(tax) if tax is not None else None
-        
-        tip = receipt_data.get('tip_amount')
-        tip = float(tip) if tip is not None else None
-        
-        # Extract date and time
-        receipt_date = receipt_data.get('transaction_date')
-        receipt_time = receipt_data.get('transaction_time')
-        
-        # Extract line items
-        items = []
-        line_items = receipt_data.get('line_items', [])
-        for item in line_items:
-            try:
-                item_name = item.get('item_name', 'Unknown Item')
-                item_price = float(item.get('item_price', 0.0))
-                item_quantity = int(item.get('item_quantity', 1))
-                
-                if item_name and item_price > 0:
-                    items.append(ReceiptItem(
-                        name=item_name,
-                        price=item_price,
-                        quantity=item_quantity,
-                        category=None
-                    ))
-            except (ValueError, TypeError) as e:
-                logger.warning("error_parsing_line_item", item=item, error=str(e))
-                continue
-        
-        # Extract additional information
-        currency = receipt_data.get('currency', 'USD')
-        payment_method = receipt_data.get('payment_method')
-        address = receipt_data.get('merchant_address')
-        phone = receipt_data.get('merchant_phone')
-        
-        receipt_data_obj = ReceiptData(
-            store_name=merchant_name,
-            total_amount=total_amount,
-            subtotal=subtotal,
-            tax=tax,
-            tip=tip,
-            date=receipt_date,
-            time=receipt_time,
-            items=items,
-            currency=currency,
-            payment_method=payment_method,
-            address=address,
-            phone=phone,
-            confidence=None  # receipt-ocr doesn't provide confidence score
-        )
-        
-        logger.info(
-            "receipt_response_parsed",
-            merchant=merchant_name,
-            total=total_amount,
-            items_count=len(items)
-        )
-        
-        return receipt_data_obj
-        
-    except Exception as e:
-        logger.error("error_parsing_receipt_response", error=str(e))
-        # Return minimal data if parsing fails
-        return ReceiptData(
-            store_name="Unknown",
-            total_amount=0.0,
-            items=[]
-        )
-
-
-async def check_receipt_ocr_health() -> bool:
-    """Check if Receipt OCR is accessible and properly configured."""
-    try:
-        return bool(receipt_ocr_api_key and receipt_ocr_processor is not None)
-    except Exception as e:
-        logger.error("health_check_failed", error=str(e))
-        return False
-
-
-# Exception handlers
+# ============================================================================
+# EXCEPTION HANDLERS & LIFESPAN
+# ============================================================================
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     """Handle HTTP exceptions."""
@@ -1634,7 +1597,6 @@ async def http_exception_handler(request, exc):
             error_code=f"HTTP_{exc.status_code}"
         ).model_dump(by_alias=True)
     )
-
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
@@ -1658,36 +1620,13 @@ async def general_exception_handler(request, exc):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
-    # Startup
     logger.info("application_starting", version="1.0.0")
     yield
-    # Shutdown
     logger.info("application_shutting_down")
 
-@app.post(
-    "/api/receipt/process-url",
-    response_model=ReceiptUploadResponse,
-    status_code=200,
-    tags=["Receipt Processing"]
-)
-
-async def process_receipt_from_url(url: str):
-    """
-    Process a receipt from a URL.
-    
-    Args:
-        url: URL of the receipt image
-        
-    Returns:
-        ReceiptUploadResponse containing the extracted receipt data
-    """
-    # This endpoint could be implemented to download from URL and process
-    # For now, returning a not implemented response
-    raise HTTPException(
-        status_code=501,
-        detail="URL processing not yet implemented. Please use file upload."
-    )
-
+# ============================================================================
+# MAIN
+# ============================================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
