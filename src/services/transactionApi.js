@@ -278,3 +278,28 @@ export const deleteSubscription = async (id) => {
 
   return true;
 };
+
+// Dashboard API function
+export const getDashboardData = async () => {
+  console.log("📡 Fetching dashboard data from:", `${API_BASE_URL}/dashboard`);
+  try {
+    const res = await fetch(`${API_BASE_URL}/dashboard`, {
+      method: "GET",
+      headers: {
+        "accept": "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Failed to load dashboard data (${res.status}): ${err}`);
+    }
+
+    return res.json();
+  } catch (error) {
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      throw new Error(`Cannot connect to backend server at ${API_BASE_URL}. Please ensure the backend server is running.`);
+    }
+    throw error;
+  }
+};

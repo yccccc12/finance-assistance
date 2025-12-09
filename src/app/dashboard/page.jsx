@@ -1,152 +1,41 @@
+'use client';
+
+import { useState, useEffect } from 'react';
 import Header from '@/components/common/Header';
 import DashboardInteractive from './components/DashboardInteractive';
-
-export const metadata = {
-  title: 'Dashboard - FinanceAssist',
-  description: 'Your financial command center with comprehensive monthly indicators, cash flow visualization, and AI-powered insights for informed decision-making.'
-};
+import Icon from '@/components/ui/AppIcon';
+import { getDashboardData } from '@/services/transactionApi';
 
 export default function DashboardPage() {
-  const dashboardData = {
-    metrics: [
-      {
-        title: 'Current Balance',
-        value: '$12,458.32',
-        change: '+8.2%',
-        changeType: 'positive',
-        icon: 'BanknotesIcon',
-        iconColor: 'bg-primary'
-      },
-      {
-        title: 'Monthly Spending',
-        value: '$3,247.89',
-        change: '-12.5%',
-        changeType: 'positive',
-        icon: 'CreditCardIcon',
-        iconColor: 'bg-accent'
-      },
-      {
-        title: 'Savings Rate',
-        value: '32.4%',
-        change: '+4.1%',
-        changeType: 'positive',
-        icon: 'ChartBarIcon',
-        iconColor: 'bg-success'
-      },
-      {
-        title: 'Financial Health',
-        value: '85/100',
-        change: '+3 points',
-        changeType: 'positive',
-        icon: 'HeartIcon',
-        iconColor: 'bg-warning'
+  const [dashboardData, setDashboardData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await getDashboardData();
+        setDashboardData(data);
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+        setError(err.message || 'Failed to load dashboard data');
+      } finally {
+        setLoading(false);
       }
-    ],
-    cashFlowData: [
-      { month: 'Jul', income: 5200, expenses: 3800 },
-      { month: 'Aug', income: 5400, expenses: 3950 },
-      { month: 'Sep', income: 5100, expenses: 3700 },
-      { month: 'Oct', income: 5600, expenses: 4100 },
-      { month: 'Nov', income: 5300, expenses: 3850 },
-      { month: 'Dec', income: 5500, expenses: 3248 }
-    ],
-    recentTransactions: [
-      {
-        id: 1,
-        description: 'Whole Foods Market',
-        amount: -127.45,
-        date: '12/05/2025',
-        category: 'Food & Dining',
-        type: 'expense'
-      },
-      {
-        id: 2,
-        description: 'Monthly Salary',
-        amount: 5500.00,
-        date: '12/01/2025',
-        category: 'Salary',
-        type: 'income'
-      },
-      {
-        id: 3,
-        description: 'Uber Ride',
-        amount: -24.80,
-        date: '12/04/2025',
-        category: 'Transportation',
-        type: 'expense'
-      },
-      {
-        id: 4,
-        description: 'Netflix Subscription',
-        amount: -15.99,
-        date: '12/03/2025',
-        category: 'Entertainment',
-        type: 'expense'
-      },
-      {
-        id: 5,
-        description: 'Freelance Project',
-        amount: 850.00,
-        date: '12/02/2025',
-        category: 'Freelance',
-        type: 'income'
-      }
-    ],
-    upcomingRenewals: [
-      {
-        id: 1,
-        name: 'Netflix',
-        amount: 15.99,
-        renewalDate: '12/08/2025',
-        daysUntil: 2
-      },
-      {
-        id: 2,
-        name: 'Spotify',
-        amount: 9.99,
-        renewalDate: '12/10/2025',
-        daysUntil: 4
-      },
-      {
-        id: 3,
-        name: 'Amazon Prime',
-        amount: 14.99,
-        renewalDate: '12/12/2025',
-        daysUntil: 6
-      }
-    ],
-    categorySpending: [
-      { name: 'Food & Dining', value: 847, percentage: 26 },
-      { name: 'Transportation', value: 523, percentage: 16 },
-      { name: 'Entertainment', value: 412, percentage: 13 },
-      { name: 'Utilities', value: 385, percentage: 12 },
-      { name: 'Healthcare', value: 298, percentage: 9 },
-      { name: 'Shopping', value: 783, percentage: 24 }
-    ],
-    quickActions: [
-      {
-        title: 'Add Transaction',
-        description: 'Manual or voice entry',
-        icon: 'PlusCircleIcon',
-        iconColor: 'bg-primary',
-        href: '/transaction-tracker'
-      },
-      {
-        title: 'Scan Receipt',
-        description: 'OCR-powered processing',
-        icon: 'CameraIcon',
-        iconColor: 'bg-accent',
-        href: '/receipt-scanner'
-      },
-      {
-        title: 'AI Assistant',
-        description: 'Get financial insights',
-        icon: 'SparklesIcon',
-        iconColor: 'bg-success',
-        href: '/ai-assistant-chat'
-      }
-    ]
-  };
+    };
+
+    fetchDashboardData();
+    
+    // Refresh dashboard data every 30 seconds
+    const interval = setInterval(fetchDashboardData, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const currentDate = new Date();
+  const currentMonth = currentDate.toLocaleString('default', { month: 'long' });
+  const currentYear = currentDate.getFullYear();
 
   return (
     <>
@@ -156,11 +45,33 @@ export default function DashboardPage() {
           <div className="mb-8">
             <h1 className="text-3xl font-semibold text-foreground">Financial Dashboard</h1>
             <p className="text-muted-foreground mt-2">
-              Your comprehensive financial overview for December 2025
+              Your comprehensive financial overview for {currentMonth} {currentYear}
             </p>
           </div>
 
-          <DashboardInteractive initialData={dashboardData} />
+          {loading && (
+            <div className="bg-card border border-border rounded-lg p-12 text-center">
+              <Icon name="ArrowPathIcon" size={64} variant="outline" className="text-muted-foreground mx-auto mb-4 animate-spin" />
+              <h3 className="text-xl font-semibold text-foreground mb-2">Loading dashboard data...</h3>
+              <p className="text-muted-foreground">Please wait while we fetch your data</p>
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 mb-6">
+              <p className="text-destructive">Error: {error}</p>
+              <button
+                onClick={() => window.location.reload()}
+                className="mt-2 text-sm text-primary hover:underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {!loading && !error && dashboardData && (
+            <DashboardInteractive initialData={dashboardData} />
+          )}
         </div>
       </main>
     </>

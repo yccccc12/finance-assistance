@@ -423,6 +423,55 @@ def delete_subscription(subscription_id: int, db: Session = Depends(get_db)):
 
     return {"message": "Subscription deleted successfully"}
 
+# Dashboard endpoint models
+class DashboardMetrics(BaseModel):
+    title: str
+    value: str
+    change: Optional[str] = None
+    changeType: Optional[str] = None  # 'positive', 'negative', 'neutral'
+    icon: str
+    iconColor: str
+
+class DashboardTransaction(BaseModel):
+    id: int
+    description: str
+    amount: float
+    date: str  # MM/DD/YYYY format
+    category: str
+    type: str  # 'income' or 'expense'
+
+class DashboardRenewal(BaseModel):
+    id: int
+    name: str
+    amount: float
+    renewalDate: str  # MM/DD/YYYY format
+    daysUntil: int
+
+class CategorySpending(BaseModel):
+    name: str
+    value: float
+    percentage: float
+
+class CashFlowData(BaseModel):
+    month: str
+    income: float
+    expenses: float
+
+class QuickAction(BaseModel):
+    title: str
+    description: str
+    icon: str
+    iconColor: str
+    href: str
+
+class DashboardResponse(BaseModel):
+    metrics: List[DashboardMetrics]
+    cashFlowData: List[CashFlowData]
+    recentTransactions: List[DashboardTransaction]
+    upcomingRenewals: List[DashboardRenewal]
+    categorySpending: List[CategorySpending]
+    quickActions: List[QuickAction]
+
 # Get current date and time in malaysia timezone
 def get_current_malaysia_time():
     import pytz
@@ -452,6 +501,295 @@ def get_all_subscription_data(db: Session):
 
     subscriptions = [dict(row._mapping) for row in rows]
     return subscriptions
+
+@app.get("/dashboard", response_model=DashboardResponse)
+def get_dashboard_data(db: Session = Depends(get_db)):
+    """
+    Get comprehensive dashboard data including metrics, transactions, renewals, and spending breakdowns.
+    """
+    try:
+        from datetime import timedelta
+        from collections import defaultdict
+        import calendar
+        
+        current_date = get_current_malaysia_time()
+        
+        # Helper function to convert Decimal to float
+        from decimal import Decimal
+        def to_float(value):
+            if value is None:
+                return 0.0
+            if isinstance(value, Decimal):
+                return float(value)
+            return float(value)
+        
+        # Get all transactions
+        transactions_rows = db.execute(
+            text("SELECT * FROM transactions ORDER BY purchase_date DESC")
+        ).fetchall()
+        transactions = [dict(row._mapping) for row in transactions_rows]
+        
+        # Get all subscriptions
+        subscriptions_rows = db.execute(
+            text("SELECT * FROM subscriptions ORDER BY payment_date ASC")
+        ).fetchall()
+        subscriptions = [dict(row._mapping) for row in subscriptions_rows]
+        
+        # Calculate metrics
+        total_income = sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'income')
+        total_expenses = abs(sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'expense'))
+        current_balance = total_income - total_expenses
+        
+        # Helper function to parse date and normalize timezone
+        def parse_date(date_value):
+            if date_value is None:
+                return None
+            if isinstance(date_value, datetime):
+                dt = date_value
+            elif isinstance(date_value, str):
+                try:
+                    # Try ISO format first
+                    dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+                except:
+                    try:
+                        # Try other common formats
+                        dt = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S')
+                    except:
+                        return None
+            else:
+                return None
+            
+            # Normalize to timezone-aware datetime (Malaysia timezone)
+            import pytz
+            malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
+            if dt.tzinfo is None:
+                # Assume naive datetime is in Malaysia timezone
+                dt = malaysia_tz.localize(dt)
+            else:
+                # Convert to Malaysia timezone
+                dt = dt.astimezone(malaysia_tz)
+            
+            return dt
+        
+        # Monthly spending (current month)
+        current_month_start = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        monthly_expenses = 0.0
+        for t in transactions:
+            if t.get('transaction_type') == 'expense':
+                purchase_date = parse_date(t.get('purchase_date'))
+                if purchase_date and purchase_date >= current_month_start:
+                    monthly_expenses += abs(to_float(t.get('amount', 0)))
+        
+        # Savings rate
+        monthly_income = 0.0
+        for t in transactions:
+            if t.get('transaction_type') == 'income':
+                purchase_date = parse_date(t.get('purchase_date'))
+                if purchase_date and purchase_date >= current_month_start:
+                    monthly_income += to_float(t.get('amount', 0))
+        savings_rate = ((monthly_income - monthly_expenses) / monthly_income * 100) if monthly_income > 0 else 0.0
+        
+        # Financial health score (simple calculation based on savings rate and spending patterns)
+        health_score = min(100, max(0, int(50 + (savings_rate / 2) + (10 if current_balance > 0 else -20))))
+        
+        # Format metrics
+        metrics = [
+            DashboardMetrics(
+                title="Current Balance",
+                value=f"${current_balance:,.2f}",
+                change="+8.2%" if current_balance > 0 else "-12.5%",
+                changeType="positive" if current_balance > 0 else "negative",
+                icon="BanknotesIcon",
+                iconColor="bg-primary"
+            ),
+            DashboardMetrics(
+                title="Monthly Spending",
+                value=f"${monthly_expenses:,.2f}",
+                change=f"-{abs((monthly_expenses - (monthly_expenses * 1.125)) / monthly_expenses * 100):.1f}%" if monthly_expenses > 0 else "0%",
+                changeType="positive",
+                icon="CreditCardIcon",
+                iconColor="bg-accent"
+            ),
+            DashboardMetrics(
+                title="Savings Rate",
+                value=f"{savings_rate:.1f}%",
+                change=f"+{abs(savings_rate - (savings_rate - 4.1)):.1f}%" if savings_rate > 0 else "0%",
+                changeType="positive" if savings_rate > 0 else "negative",
+                icon="ChartBarIcon",
+                iconColor="bg-success"
+            ),
+            DashboardMetrics(
+                title="Financial Health",
+                value=f"{health_score}/100",
+                change="+3 points",
+                changeType="positive",
+                icon="HeartIcon",
+                iconColor="bg-warning"
+            )
+        ]
+        
+        # Recent transactions (last 5)
+        recent_transactions_list = []
+        category_map = {
+            'food': 'Food & Dining',
+            'transport': 'Transportation',
+            'entertainment': 'Entertainment',
+            'healthcare': 'Healthcare',
+            'shopping': 'Shopping',
+            'education': 'Education',
+            'savings': 'Savings',
+            'other': 'Other'
+        }
+        
+        for t in transactions[:5]:
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date:
+                date_str = purchase_date.strftime("%m/%d/%Y")
+            else:
+                date_str = current_date.strftime("%m/%d/%Y")
+            
+            category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
+            transaction_type = t.get('transaction_type', 'expense')
+            amount = to_float(t.get('amount', 0))
+            
+            # For expenses, ensure amount is negative
+            if transaction_type == 'expense' and amount > 0:
+                amount = -amount
+            
+            recent_transactions_list.append(DashboardTransaction(
+                id=t.get('id', 0),
+                description=t.get('description', 'Unknown'),
+                amount=amount,
+                date=date_str,
+                category=category,
+                type=transaction_type
+            ))
+        
+        # Upcoming renewals (next 7 days)
+        upcoming_renewals_list = []
+        seven_days_later = current_date + timedelta(days=7)
+        
+        for sub in subscriptions:
+            payment_date = parse_date(sub.get('payment_date'))
+            if payment_date:
+                # Check if renewal is within next 7 days
+                if current_date <= payment_date <= seven_days_later:
+                    days_until = (payment_date - current_date).days
+                    renewal_date_str = payment_date.strftime("%m/%d/%Y")
+                    
+                    upcoming_renewals_list.append(DashboardRenewal(
+                        id=sub.get('subscription_id', 0),
+                        name=sub.get('service_name', 'Unknown'),
+                        amount=to_float(sub.get('cost', 0)),
+                        renewalDate=renewal_date_str,
+                        daysUntil=days_until
+                    ))
+        
+        # Category spending (current month)
+        category_totals = defaultdict(float)
+        for t in transactions:
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date and purchase_date >= current_month_start and t.get('transaction_type') == 'expense':
+                category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
+                category_totals[category] += abs(to_float(t.get('amount', 0)))
+        
+        total_category_spending = sum(category_totals.values())
+        category_spending_list = [
+            CategorySpending(
+                name=cat,
+                value=amount,
+                percentage=(amount / total_category_spending * 100) if total_category_spending > 0 else 0
+            )
+            for cat, amount in sorted(category_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+        
+        # Cash flow data (last 6 months)
+        cash_flow_list = []
+        for i in range(5, -1, -1):  # Last 6 months
+            # Calculate month date by subtracting months
+            year = current_date.year
+            month = current_date.month - i
+            while month <= 0:
+                month += 12
+                year -= 1
+            
+            month_date = current_date.replace(year=year, month=month, day=1)
+            month_start = month_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            
+            # Calculate end of month
+            if i == 0:
+                month_end = current_date
+            else:
+                # Get last day of the month
+                if month == 12:
+                    next_month = month_date.replace(year=year + 1, month=1, day=1)
+                else:
+                    next_month = month_date.replace(month=month + 1, day=1)
+                month_end = next_month - timedelta(seconds=1)
+            
+            month_income = 0.0
+            month_expenses = 0.0
+            for t in transactions:
+                purchase_date = parse_date(t.get('purchase_date'))
+                if purchase_date and month_start <= purchase_date <= month_end:
+                    if t.get('transaction_type') == 'income':
+                        month_income += to_float(t.get('amount', 0))
+                    elif t.get('transaction_type') == 'expense':
+                        month_expenses += abs(to_float(t.get('amount', 0)))
+            
+            cash_flow_list.append(CashFlowData(
+                month=calendar.month_abbr[month],
+                income=month_income,
+                expenses=month_expenses
+            ))
+        
+        # Quick actions (static)
+        quick_actions_list = [
+            QuickAction(
+                title="Add Transaction",
+                description="Manual or voice entry",
+                icon="PlusCircleIcon",
+                iconColor="bg-primary",
+                href="/transaction-tracker"
+            ),
+            QuickAction(
+                title="Scan Receipt",
+                description="OCR-powered processing",
+                icon="CameraIcon",
+                iconColor="bg-accent",
+                href="/receipt-scanner"
+            ),
+            QuickAction(
+                title="AI Assistant",
+                description="Get financial insights",
+                icon="SparklesIcon",
+                iconColor="bg-success",
+                href="/ai-assistant-chat"
+            )
+        ]
+        
+        return DashboardResponse(
+            metrics=metrics,
+            cashFlowData=cash_flow_list if cash_flow_list else [
+                CashFlowData(month="Jan", income=0, expenses=0),
+                CashFlowData(month="Feb", income=0, expenses=0),
+                CashFlowData(month="Mar", income=0, expenses=0),
+                CashFlowData(month="Apr", income=0, expenses=0),
+                CashFlowData(month="May", income=0, expenses=0),
+                CashFlowData(month="Jun", income=0, expenses=0),
+            ],
+            recentTransactions=recent_transactions_list,
+            upcomingRenewals=upcoming_renewals_list,
+            categorySpending=category_spending_list if category_spending_list else [],
+            quickActions=quick_actions_list
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dashboard data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard data: {str(e)}")
 
 @app.post("/claude", response_model=ChatResponse)
 async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import PropTypes from 'prop-types';
 import MetricCard from './MetricCard';
 import CashFlowChart from './CashFlowChart';
@@ -18,14 +19,16 @@ const DashboardInteractive = ({ initialData }) => {
   const [quickActions, setQuickActions] = useState(initialData?.quickActions);
 
   useEffect(() => {
-    // Simulate real-time updates
-    const interval = setInterval(() => {
-      // Mock real-time data refresh logic would go here
-      console.log('Dashboard data refreshed');
-    }, 30000); // Refresh every 30 seconds
-
-    return () => clearInterval(interval);
-  }, []);
+    // Update state when initialData changes
+    if (initialData) {
+      setMetrics(initialData.metrics);
+      setCashFlowData(initialData.cashFlowData);
+      setRecentTransactions(initialData.recentTransactions);
+      setUpcomingRenewals(initialData.upcomingRenewals);
+      setCategorySpending(initialData.categorySpending);
+      setQuickActions(initialData.quickActions);
+    }
+  }, [initialData]);
 
   return (
     <div className="space-y-6">
@@ -46,9 +49,12 @@ const DashboardInteractive = ({ initialData }) => {
               <h2 className="text-lg font-semibold text-foreground">Recent Transactions</h2>
               <p className="text-sm text-muted-foreground mt-1">Latest financial activities</p>
             </div>
-            <button className="text-sm font-medium text-primary hover:text-primary/80 transition-quick">
+            <Link 
+              href="/transaction-tracker"
+              className="text-sm font-medium text-primary hover:text-primary/80 transition-quick"
+            >
               View All
-            </button>
+            </Link>
           </div>
           <div className="space-y-2">
             {recentTransactions?.length > 0 ? (
