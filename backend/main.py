@@ -65,6 +65,7 @@ logging.basicConfig(
     stream=sys.stdout,
     level=logging.INFO,
 )
+
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
@@ -177,7 +178,8 @@ class ParseTransactionResponse(BaseModel):
     description: str
     amount: Optional[float] = None
     date: Optional[str] = None  # ISO format date string
-    category: Optional[str] = None  # One of: food, transport, utilities, entertainment, healthcare, shopping, education, other
+    category: Optional[str] = None  # One of: food, transport, entertainment, healthcare, shopping, education, savings, other
+    transaction_type: Optional[str] = None  # "income" or "expense"
 
 class ParseSubscriptionRequest(BaseModel):
     text: str
@@ -195,7 +197,8 @@ class TransactionBase(BaseModel):
     amount: float
     category: Optional[str] = None
     description: Optional[str] = None
-    purchase_date: datetime  
+    purchase_date: datetime
+    transaction_type: Optional[str] = "expense"  # "income" or "expense"
 
 class TransactionCreate(TransactionBase):
     pass
@@ -205,6 +208,7 @@ class TransactionUpdate(BaseModel):
     category: Optional[str] = None
     description: Optional[str] = None
     purchase_date: Optional[datetime] = None
+    transaction_type: Optional[str] = None
 
 class TransactionOut(TransactionBase):
     id: int
@@ -242,12 +246,25 @@ class SubscriptionOut(SubscriptionBase):
 @app.post("/transactions", response_model=TransactionOut)
 def create_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
     try:
+        # Validate transaction_type
+        transaction_type = data.transaction_type or "expense"
+        if transaction_type not in ["income", "expense"]:
+            transaction_type = "expense"
+        
+        # Capitalize description (first letter uppercase)
+        description = data.description.strip() if data.description else ""
+        if description:
+            description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
+        
         query = text("""
-            INSERT INTO transactions (user_id, amount, category, description, purchase_date)
-            VALUES (:user_id, :amount, :category, :description, :purchase_date)
+            INSERT INTO transactions (user_id, amount, category, description, purchase_date, transaction_type)
+            VALUES (:user_id, :amount, :category, :description, :purchase_date, :transaction_type)
         """)
 
-        result = db.execute(query, data.dict())
+        transaction_data = data.dict()
+        transaction_data['transaction_type'] = transaction_type
+        transaction_data['description'] = description
+        result = db.execute(query, transaction_data)
         db.commit()
 
         new_id = result.lastrowid
@@ -286,6 +303,17 @@ def update_transaction(transaction_id: int, update: TransactionUpdate, db: Sessi
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update.")
+    
+    # Validate transaction_type if provided
+    if 'transaction_type' in updates:
+        if updates['transaction_type'] not in ["income", "expense"]:
+            updates['transaction_type'] = "expense"
+    
+    # Capitalize description if provided (first letter uppercase)
+    if 'description' in updates and updates['description']:
+        description = updates['description'].strip()
+        if description:
+            updates['description'] = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
 
     set_clause = ", ".join([f"{key} = :{key}" for key in updates])
     updates["id"] = transaction_id
@@ -508,7 +536,7 @@ async def parse_transaction(request: ParseTransactionRequest):
         system_prompt = f"""
         You are a financial transaction parser. Extract transaction information from the user's spoken input.
 
-        Available categories: food, transport, utilities, entertainment, healthcare, shopping, education, other
+        Available categories: food, transport, entertainment, healthcare, shopping, education, savings, other
 
         Current date: {date_str}
 
@@ -517,21 +545,27 @@ async def parse_transaction(request: ParseTransactionRequest):
             "description": "A clear description of the transaction",
             "amount": 0.0,
             "date": "YYYY-MM-DD" or null if not specified (default to current date if not mentioned),
-            "category": "one of the available categories" or null
+            "category": "one of the available categories" or null,
+            "transaction_type": "income" or "expense"
         }}
 
         Rules:
-        - Extract the amount in dollars (handle phrases like "25 dollars", "$25", "twenty five dollars")
+        - Extract the amount in dollars (handle phrases like "25 dollars", "$25", "twenty five dollars", "twenty ringgit", "RM20")
         - Parse dates if mentioned (e.g., "yesterday", "today", "last week", "December 5th" should be converted to YYYY-MM-DD format)
         - If date is not mentioned, use current date: {date_str}
-        - Extract a meaningful description (remove filler words like "I spent", "I paid")
+        - Extract a meaningful description (remove filler words like "I spent", "I paid", "I received")
         - Determine the most appropriate category based on keywords
+        - CRITICAL: Determine transaction_type based on context:
+          * "income" if user mentions: received, earned, salary, payment received, got money, gift, allowance, refund
+          * "expense" if user mentions: spent, paid, bought, purchase, cost, bill, fee, expense
+          * Default to "expense" if unclear
         - Return ONLY valid JSON, no additional text or explanation
         """
 
         user_message = f"""Parse this transaction: "{request.text}"
 
-        Return JSON with description, amount, date (YYYY-MM-DD or null), and category.
+        Return JSON with description, amount, date (YYYY-MM-DD or null), category, and transaction_type ("income" or "expense").
+        Determine transaction_type: use "income" for money received/earned, "expense" for money spent/paid.
         """
 
         res = claude_client.messages.create(
@@ -566,29 +600,46 @@ async def parse_transaction(request: ParseTransactionRequest):
 
             # Validate and set defaults
             description = parsed_data.get("description", request.text.strip())
+            # Capitalize description (first letter uppercase)
+            if description:
+                description = description.strip()
+                description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
+            
             amount = parsed_data.get("amount")
             date = parsed_data.get("date") or date_str
             category = parsed_data.get("category")
+            transaction_type = parsed_data.get("transaction_type", "expense")  # Default to expense
 
             # Validate category
-            valid_categories = ["food", "transport", "utilities", "entertainment", "healthcare", "shopping", "education", "other"]
+            valid_categories = ["food", "transport", "entertainment", "healthcare", "shopping", "education", "savings", "other"]
             if category and category not in valid_categories:
                 category = None
+
+            # Validate transaction_type
+            if transaction_type not in ["income", "expense"]:
+                transaction_type = "expense"
 
             return ParseTransactionResponse(
                 description=description,
                 amount=amount,
                 date=date,
-                category=category
+                category=category,
+                transaction_type=transaction_type
             )
         except (json.JSONDecodeError, ValueError, KeyError) as e:
             # Fallback: return basic structure with just description
             logger.error(f"Failed to parse Claude response: {e}", response=reply_text)
+            # Capitalize description (first letter uppercase)
+            description = request.text.strip()
+            if description:
+                description = description[0].upper() + description[1:] if len(description) > 1 else description.upper()
+            
             return ParseTransactionResponse(
-                description=request.text.strip(),
+                description=description,
                 amount=None,
                 date=date_str,
-                category=None
+                category=None,
+                transaction_type="expense"  # Default to expense on error
             )
 
     except Exception as e:

@@ -15,11 +15,11 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
   const categories = {
     'food': { label: 'Food & Dining', icon: 'ShoppingBagIcon', color: 'bg-orange-500' },
     'transport': { label: 'Transportation', icon: 'TruckIcon', color: 'bg-blue-500' },
-    'utilities': { label: 'Utilities', icon: 'BoltIcon', color: 'bg-yellow-500' },
     'entertainment': { label: 'Entertainment', icon: 'FilmIcon', color: 'bg-purple-500' },
     'healthcare': { label: 'Healthcare', icon: 'HeartIcon', color: 'bg-red-500' },
     'shopping': { label: 'Shopping', icon: 'ShoppingCartIcon', color: 'bg-pink-500' },
     'education': { label: 'Education', icon: 'AcademicCapIcon', color: 'bg-indigo-500' },
+    'savings': { label: 'Savings', icon: 'BanknotesIcon', color: 'bg-green-500' },
     'other': { label: 'Other', icon: 'EllipsisHorizontalIcon', color: 'bg-gray-500' }
   };
 
@@ -72,11 +72,14 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
 
   const handleEditClick = (transaction) => {
     setEditingId(transaction?.id);
+    // Preserve original transaction_type, default to 'expense' only if truly missing
+    const originalTransactionType = transaction?.transaction_type;
     setEditFormData({
       description: transaction?.description || '',
       amount: transaction?.amount?.toString() || '',
       date: formatDateForInput(transaction?.date || transaction?.purchase_date),
-      category: transaction?.category || ''
+      category: transaction?.category || '',
+      transaction_type: originalTransactionType || 'expense'  // Use original value, only default if missing
     });
   };
 
@@ -89,12 +92,22 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
   };
 
   const handleEditSave = (id) => {
+    // Capitalize description (first letter uppercase)
+    let description = editFormData?.description?.trim() || '';
+    if (description) {
+      description = description[0].toUpperCase() + description.slice(1);
+    }
+    
+    // Preserve transaction_type from editFormData, ensure it's set
+    const transactionType = editFormData?.transaction_type || 'expense';
+    
     const updatedTransaction = {
       id,
-      description: editFormData?.description,
+      description: description,
       amount: parseFloat(editFormData?.amount),
       date: editFormData?.date,
       category: editFormData?.category,
+      transaction_type: transactionType,  // Always include transaction_type
       timestamp: new Date()?.toISOString()
     };
     onEditTransaction(updatedTransaction);
@@ -331,6 +344,53 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
                       className="px-3 py-2 border border-input rounded-md bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                   </div>
+                  {/* Transaction Type Selector */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditFormData(prev => ({ ...prev, transaction_type: 'expense' }))}
+                      className={`flex items-center justify-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-quick border ${
+                        editFormData?.transaction_type === 'expense'
+                          ? 'bg-red-500 text-white border-transparent'
+                          : 'bg-background text-foreground border-input hover:bg-muted'
+                      }`}
+                    >
+                      <Icon name="ArrowDownCircleIcon" size={16} variant={editFormData?.transaction_type === 'expense' ? 'solid' : 'outline'} />
+                      <span>Expense (-)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditFormData(prev => ({ ...prev, transaction_type: 'income' }))}
+                      className={`flex items-center justify-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-quick border ${
+                        editFormData?.transaction_type === 'income'
+                          ? 'bg-green-500 text-white border-transparent'
+                          : 'bg-background text-foreground border-input hover:bg-muted'
+                      }`}
+                    >
+                      <Icon name="ArrowUpCircleIcon" size={16} variant={editFormData?.transaction_type === 'income' ? 'solid' : 'outline'} />
+                      <span>Income (+)</span>
+                    </button>
+                  </div>
+                  {/* Category Dropdown */}
+                  <div className="relative">
+                    <label className="block text-xs font-medium text-foreground mb-1">Category</label>
+                    <select
+                      name="category"
+                      value={editFormData?.category || ''}
+                      onChange={handleEditChange}
+                      className="w-full appearance-none bg-background border border-input rounded-md px-3 py-2 pr-8 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer"
+                    >
+                      <option value="">Select category</option>
+                      {Object.entries(categories).map(([key, cat]) => (
+                        <option key={key} value={key}>
+                          {cat.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute right-2 top-8 pointer-events-none">
+                      <Icon name="ChevronDownIcon" size={16} variant="outline" className="text-muted-foreground" />
+                    </div>
+                  </div>
                   <div className="flex space-x-2">
                     <button
                       onClick={() => handleEditSave(transaction?.id)}
@@ -357,8 +417,12 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
                         {transaction?.description}
                       </p>
                       <div className="flex items-center space-x-2 mt-1">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${category?.color} text-white`}>
-                          {category?.label}
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          transaction?.transaction_type === 'income' 
+                            ? 'bg-green-500' 
+                            : category?.color
+                        } text-white`}>
+                          {transaction?.transaction_type === 'income' ? 'Income' : category?.label}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {formatDate(transaction?.date || transaction?.purchase_date)}
@@ -367,8 +431,22 @@ const TransactionList = ({ transactions, onEditTransaction, onDeleteTransaction 
                     </div>
                   </div>
                   <div className="flex items-center space-x-3 ml-4">
-                    <span className="text-lg font-semibold text-foreground">
-                      {formatAmount(transaction?.amount)}
+                    <span className={`text-lg font-semibold flex items-center space-x-1 ${
+                      transaction?.transaction_type === 'income' 
+                        ? 'text-green-600' 
+                        : 'text-red-600'
+                    }`}>
+                      {transaction?.transaction_type === 'income' ? (
+                        <>
+                          <span>+</span>
+                          <span>{formatAmount(transaction?.amount)}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>-</span>
+                          <span>{formatAmount(transaction?.amount)}</span>
+                        </>
+                      )}
                     </span>
                     <div className="flex space-x-1">
                       <button

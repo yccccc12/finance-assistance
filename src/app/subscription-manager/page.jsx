@@ -1,5 +1,4 @@
 import Header from '@/components/common/Header';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import SubscriptionManagerInteractive from './components/SubscriptionManagerInteractive';
 
 export const metadata = {
@@ -153,7 +152,6 @@ export default function SubscriptionManagerPage() {
       <main className="pt-16">
         <SubscriptionManagerInteractive initialData={pageData} />
       </main>
-      <QuickActionButton />
     </>
   );
 }

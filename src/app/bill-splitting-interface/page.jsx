@@ -4,7 +4,6 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import Header from '@/components/common/Header';
 import Breadcrumb from '@/components/common/Breadcrumb';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import BillSplittingInteractive from './components/BillSplittingInteractive';
 
 function BillSplittingContent() {
@@ -108,7 +107,6 @@ function BillSplittingContent() {
       )}
       
       <BillSplittingInteractive initialData={initialData} />
-      <QuickActionButton />
     </>
   );
 }

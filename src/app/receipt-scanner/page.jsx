@@ -1,6 +1,5 @@
 import Header from '@/components/common/Header';
 import Breadcrumb from '@/components/common/Breadcrumb';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import ReceiptScannerInteractive from './components/ReceiptScannerInteractive';
 
 export const metadata = {
@@ -90,8 +89,6 @@ export default function ReceiptScannerPage() {
           <ReceiptScannerInteractive initialReceipts={mockRecentReceipts} />
         </div>
       </main>
-
-      <QuickActionButton />
     </div>
   );
 }

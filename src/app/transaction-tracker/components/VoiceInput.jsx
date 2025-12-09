@@ -30,11 +30,11 @@ const VoiceInput = ({ onTranscriptionComplete }) => {
     const categoryKeywords = {
       'food': ['lunch', 'dinner', 'breakfast', 'restaurant', 'food', 'coffee', 'meal'],
       'transport': ['uber', 'taxi', 'gas', 'fuel', 'parking', 'bus', 'train'],
-      'utilities': ['electricity', 'water', 'internet', 'phone', 'bill'],
       'entertainment': ['movie', 'netflix', 'spotify', 'concert', 'game'],
       'healthcare': ['doctor', 'pharmacy', 'medicine', 'hospital', 'clinic'],
       'shopping': ['amazon', 'walmart', 'target', 'store', 'shopping'],
-      'education': ['book', 'course', 'tuition', 'school', 'class']
+      'education': ['book', 'course', 'tuition', 'school', 'class'],
+      'savings': ['savings', 'deposit', 'investment', 'save']
     };
 
     for (const [cat, keywords] of Object.entries(categoryKeywords)) {

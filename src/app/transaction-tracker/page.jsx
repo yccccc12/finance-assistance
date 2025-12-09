@@ -1,5 +1,4 @@
 import Header from '@/components/common/Header';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import TransactionTrackerInteractive from './components/TransactionTrackerInteractive';
 
 export const metadata = {
@@ -12,7 +11,6 @@ export default function TransactionTrackerPage() {
     <>
       <Header />
       <TransactionTrackerInteractive />
-      <QuickActionButton />
     </>
   );
 }

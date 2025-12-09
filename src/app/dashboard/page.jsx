@@ -1,5 +1,4 @@
 import Header from '@/components/common/Header';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import DashboardInteractive from './components/DashboardInteractive';
 
 export const metadata = {
@@ -164,7 +163,6 @@ export default function DashboardPage() {
           <DashboardInteractive initialData={dashboardData} />
         </div>
       </main>
-      <QuickActionButton />
     </>
   );
 }

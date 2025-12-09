@@ -59,11 +59,16 @@ const TransactionTrackerInteractive = () => {
 
   const handleEditTransaction = async (updatedTransaction) => {
     try {
+      // Always include transaction_type to preserve it, use original if not provided
+      const originalTransaction = transactions.find(t => t.id === updatedTransaction.id);
+      const transactionTypeToSend = updatedTransaction.transaction_type || originalTransaction?.transaction_type || 'expense';
+      
       const result = await updateTransaction(updatedTransaction.id, {
         description: updatedTransaction.description,
         amount: updatedTransaction.amount,
         date: updatedTransaction.date,
-        category: updatedTransaction.category
+        category: updatedTransaction.category,
+        transaction_type: transactionTypeToSend
       });
       // Normalize the updated transaction: convert purchase_date to date
       const normalizedResult = {

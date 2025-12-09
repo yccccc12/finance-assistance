@@ -1,5 +1,4 @@
 import Header from '@/components/common/Header';
-import QuickActionButton from '@/components/common/QuickActionButton';
 import AIAssistantInteractive from './components/AIAssistantInteractive';
 
 export const metadata = {
@@ -13,7 +12,6 @@ export default function AIAssistantChatPage() {
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <QuickActionButton />
       
       <main className="pt-16">
         <div className="h-[calc(100vh-4rem)] flex flex-col">

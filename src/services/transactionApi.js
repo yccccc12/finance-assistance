@@ -32,6 +32,7 @@ export const createTransaction = async (transaction) => {
     category: transaction.category,
     description: transaction.description,
     purchase_date: transaction.date,     // backend requires purchase_date
+    transaction_type: transaction.transaction_type || 'expense',  // 'income' or 'expense'
   };
 
   console.log("📤 Creating transaction:", { API_URL, payload });
@@ -59,6 +60,7 @@ export const updateTransaction = async (id, transaction) => {
     category: transaction.category,
     description: transaction.description,
     purchase_date: transaction.date,
+    transaction_type: transaction.transaction_type || 'expense',
   };
 
   const res = await fetch(`${API_URL}/${id}`, {
@@ -224,12 +226,12 @@ export const createSubscription = async (subscription) => {
 export const updateSubscription = async (id, subscription) => {
   // Transform frontend format to backend format
   const payload = {};
-  if (subscription.serviceName !== undefined) payload.service_name = subscription.serviceName;
-  if (subscription.cost !== undefined) payload.cost = parseFloat(subscription.cost);
-  if (subscription.nextPaymentDate !== undefined) payload.payment_date = subscription.nextPaymentDate;
-  if (subscription.payment_date !== undefined) payload.payment_date = subscription.payment_date;
-  if (subscription.category !== undefined) payload.category = subscription.category;
-  if (subscription.description !== undefined) payload.description = subscription.description;
+  if (transaction.user_id !== undefined) payload.user_id = transaction.user_id ?? 1;
+  if (transaction.amount !== undefined) payload.amount = transaction.amount;
+  if (transaction.category !== undefined) payload.category = transaction.category;
+  if (transaction.description !== undefined) payload.description = transaction.description;
+  if (transaction.date !== undefined) payload.purchase_date = transaction.date;
+  if (transaction.transaction_type !== undefined) payload.transaction_type = transaction.transaction_type;
 
   const res = await fetch(`${SUBSCRIPTIONS_API_URL}/${id}`, {
     method: "PUT",

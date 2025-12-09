@@ -10,7 +10,8 @@ const TransactionForm = ({ onAddTransaction }) => {
     description: '',
     amount: '',
     date: new Date()?.toISOString()?.split('T')?.[0],
-    category: ''
+    category: '',
+    transaction_type: 'expense'  // 'income' or 'expense'
   });
 
   const [errors, setErrors] = useState({});
@@ -29,11 +30,11 @@ const TransactionForm = ({ onAddTransaction }) => {
   const categories = [
     { id: 'food', label: 'Food & Dining', icon: 'ShoppingBagIcon', color: 'bg-orange-500' },
     { id: 'transport', label: 'Transportation', icon: 'TruckIcon', color: 'bg-blue-500' },
-    { id: 'utilities', label: 'Utilities', icon: 'BoltIcon', color: 'bg-yellow-500' },
     { id: 'entertainment', label: 'Entertainment', icon: 'FilmIcon', color: 'bg-purple-500' },
     { id: 'healthcare', label: 'Healthcare', icon: 'HeartIcon', color: 'bg-red-500' },
     { id: 'shopping', label: 'Shopping', icon: 'ShoppingCartIcon', color: 'bg-pink-500' },
     { id: 'education', label: 'Education', icon: 'AcademicCapIcon', color: 'bg-indigo-500' },
+    { id: 'savings', label: 'Savings', icon: 'BanknotesIcon', color: 'bg-green-500' },
     { id: 'other', label: 'Other', icon: 'EllipsisHorizontalIcon', color: 'bg-gray-500' }
   ];
 
@@ -76,12 +77,19 @@ const TransactionForm = ({ onAddTransaction }) => {
     e?.preventDefault();
 
     if (validateForm()) {
+      // Capitalize description (first letter uppercase)
+      let description = formData?.description?.trim() || '';
+      if (description) {
+        description = description[0].toUpperCase() + description.slice(1);
+      }
+      
       const transaction = {
         id: Date.now(),
-        description: formData?.description?.trim(),
+        description: description,
         amount: parseFloat(formData?.amount),
         date: formData?.date,
         category: formData?.category,
+        transaction_type: formData?.transaction_type,
         timestamp: new Date()?.toISOString()
       };
 
@@ -91,7 +99,8 @@ const TransactionForm = ({ onAddTransaction }) => {
         description: '',
         amount: '',
         date: new Date()?.toISOString()?.split('T')?.[0],
-        category: ''
+        category: '',
+        transaction_type: 'expense'
       });
       setErrors({});
     }
@@ -200,7 +209,8 @@ const TransactionForm = ({ onAddTransaction }) => {
         description: parsedTransaction.description || transcribedText,
         amount: parsedTransaction.amount?.toString() || prev.amount,
         date: parsedTransaction.date || prev.date,
-        category: parsedTransaction.category || prev.category
+        category: parsedTransaction.category || prev.category,
+        transaction_type: parsedTransaction.transaction_type || 'expense'  // AI detected or default to expense
       }));
       
       // Clear errors for all fields
@@ -339,7 +349,23 @@ const TransactionForm = ({ onAddTransaction }) => {
                 <div className="flex items-center space-x-2">
                   <Icon name="CurrencyDollarIcon" size={14} variant="outline" className="text-muted-foreground" />
                   <span className="text-xs text-muted-foreground">Amount:</span>
-                  <span className="text-sm text-foreground font-medium">${parsedTransaction.amount.toFixed(2)}</span>
+                  <span className={`text-sm font-medium ${
+                    parsedTransaction.transaction_type === 'income' ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {parsedTransaction.transaction_type === 'income' ? '+' : '-'}${parsedTransaction.amount.toFixed(2)}
+                  </span>
+                </div>
+              )}
+              
+              {parsedTransaction.transaction_type && (
+                <div className="flex items-center space-x-2">
+                  <Icon name={parsedTransaction.transaction_type === 'income' ? 'ArrowUpCircleIcon' : 'ArrowDownCircleIcon'} size={14} variant="outline" className="text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">Type:</span>
+                  <span className={`text-sm font-medium ${
+                    parsedTransaction.transaction_type === 'income' ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {parsedTransaction.transaction_type === 'income' ? 'Income (+)' : 'Expense (-)'}
+                  </span>
                 </div>
               )}
               
@@ -383,6 +409,39 @@ const TransactionForm = ({ onAddTransaction }) => {
           </div>
         </div>
       )}
+      {/* Transaction Type Selection */}
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-foreground mb-3">
+          Transaction Type
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setFormData(prev => ({ ...prev, transaction_type: 'expense' }))}
+            className={`flex items-center justify-center space-x-2 px-4 py-3 rounded-md border transition-quick ${
+              formData?.transaction_type === 'expense'
+                ? 'bg-red-500 text-white border-transparent'
+                : 'bg-background text-foreground border-input hover:bg-muted'
+            }`}
+          >
+            <Icon name="ArrowDownCircleIcon" size={20} variant={formData?.transaction_type === 'expense' ? 'solid' : 'outline'} />
+            <span className="text-sm font-medium">Expense (-)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFormData(prev => ({ ...prev, transaction_type: 'income' }))}
+            className={`flex items-center justify-center space-x-2 px-4 py-3 rounded-md border transition-quick ${
+              formData?.transaction_type === 'income'
+                ? 'bg-green-500 text-white border-transparent'
+                : 'bg-background text-foreground border-input hover:bg-muted'
+            }`}
+          >
+            <Icon name="ArrowUpCircleIcon" size={20} variant={formData?.transaction_type === 'income' ? 'solid' : 'outline'} />
+            <span className="text-sm font-medium">Income (+)</span>
+          </button>
+        </div>
+      </div>
+
       {/* Amount and Date Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
