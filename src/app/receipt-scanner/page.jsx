@@ -37,7 +37,7 @@ export default function ReceiptScannerPage() {
       storeName: 'Amazon',
       totalAmount: '89.99',
       date: '12/02/2025',
-      imageUrl: 'https://images.pixabay.com/photo/2017/08/10/08/47/laptop-2619564_1280.jpg',
+      imageUrl: 'https://images.pexels.com/photos/7688336/pexels-photo-7688336.jpeg?auto=compress&cs=tinysrgb&w=800&h=600&fit=crop',
       itemCount: 2,
       isSplit: false
     },
@@ -64,7 +64,7 @@ export default function ReceiptScannerPage() {
       storeName: 'CVS Pharmacy',
       totalAmount: '67.89',
       date: '11/29/2025',
-      imageUrl: 'https://images.pixabay.com/photo/2016/11/29/03/36/architecture-1867187_1280.jpg',
+      imageUrl: 'https://images.pexels.com/photos/40568/medical-appointment-doctor-healthcare-40568.jpeg?auto=compress&cs=tinysrgb&w=800&h=600&fit=crop',
       itemCount: 6,
       isSplit: false
     }

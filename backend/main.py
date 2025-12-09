@@ -22,13 +22,8 @@ from models.schemas import (
 )
 
 import os
-import re
-import time
 import json
 from pathlib import Path
-import requests
-import markdown
-from bs4 import BeautifulSoup
 import tempfile
 import asyncio
 from receipt_ocr.processors import ReceiptProcessor
@@ -243,7 +238,7 @@ class SubscriptionOut(SubscriptionBase):
     }
 
 
-@app.post("/transactions", response_model=TransactionOut)
+@app.post("/transactions", response_model=TransactionOut, tags=["Transaction"])
 def create_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
     try:
         # Validate transaction_type
@@ -280,12 +275,12 @@ def create_transaction(data: TransactionCreate, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.get("/transactions", response_model=List[TransactionOut])
+@app.get("/transactions", response_model=List[TransactionOut], tags=["Transaction"])
 def get_all_transactions(db: Session = Depends(get_db)):
     rows = db.execute(text("SELECT * FROM transactions ORDER BY purchase_date DESC")).fetchall()
     return rows
 
-@app.get("/transactions/{transaction_id}", response_model=TransactionOut)
+@app.get("/transactions/{transaction_id}", response_model=TransactionOut, tags=["Transaction"])
 def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
     row = db.execute(
         text("SELECT * FROM transactions WHERE id = :id"),
@@ -297,7 +292,7 @@ def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
 
     return row
 
-@app.put("/transactions/{transaction_id}", response_model=TransactionOut)
+@app.put("/transactions/{transaction_id}", response_model=TransactionOut, tags=["Transaction"])
 def update_transaction(transaction_id: int, update: TransactionUpdate, db: Session = Depends(get_db)):
     updates = {k: v for k, v in update.dict().items() if v is not None}
 
@@ -335,7 +330,7 @@ def update_transaction(transaction_id: int, update: TransactionUpdate, db: Sessi
 
     return updated
 
-@app.delete("/transactions/{transaction_id}")
+@app.delete("/transactions/{transaction_id}", tags=["Transaction"])
 def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
     db.execute(
         text("DELETE FROM transactions WHERE id = :id"),
@@ -345,7 +340,7 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
 
     return {"message": "Transaction deleted successfully"}
 
-@app.post("/subscriptions", response_model=SubscriptionOut)
+@app.post("/subscriptions", response_model=SubscriptionOut, tags=["Subscription"])
 def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db)):
     try:
         query = text("""
@@ -369,12 +364,12 @@ def create_subscription(data: SubscriptionCreate, db: Session = Depends(get_db))
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     
-@app.get("/subscriptions", response_model=List[SubscriptionOut])
+@app.get("/subscriptions", response_model=List[SubscriptionOut], tags=["Subscription"])
 def get_all_subscriptions(db: Session = Depends(get_db)):
     rows = db.execute(text("SELECT * FROM subscriptions ORDER BY payment_date DESC")).fetchall()
     return rows
 
-@app.get("/subscriptions/{subscription_id}", response_model=SubscriptionOut)
+@app.get("/subscriptions/{subscription_id}", response_model=SubscriptionOut, tags=["Subscription"])
 def get_subscription(subscription_id: int, db: Session = Depends(get_db)):
     row = db.execute(
         text("SELECT * FROM subscriptions WHERE subscription_id = :id"),
@@ -386,7 +381,7 @@ def get_subscription(subscription_id: int, db: Session = Depends(get_db)):
 
     return row
 
-@app.put("/subscriptions/{subscription_id}", response_model=SubscriptionOut)
+@app.put("/subscriptions/{subscription_id}", response_model=SubscriptionOut, tags=["Subscription"])
 def update_subscription(subscription_id: int, update: SubscriptionUpdate, db: Session = Depends(get_db)):
     updates = {k: v for k, v in update.dict().items() if v is not None}
 
@@ -413,7 +408,7 @@ def update_subscription(subscription_id: int, update: SubscriptionUpdate, db: Se
 
     return updated
 
-@app.delete("/subscriptions/{subscription_id}")
+@app.delete("/subscriptions/{subscription_id}", tags=["Subscription"])
 def delete_subscription(subscription_id: int, db: Session = Depends(get_db)):
     db.execute(
         text("DELETE FROM subscriptions WHERE subscription_id = :id"),
@@ -502,92 +497,193 @@ def get_all_subscription_data(db: Session):
     subscriptions = [dict(row._mapping) for row in rows]
     return subscriptions
 
-@app.get("/dashboard", response_model=DashboardResponse)
+def _compute_dashboard_metrics(db: Session):
+    """
+    Internal function to compute dashboard metrics.
+    Returns raw data that can be used by both the dashboard endpoint and AI endpoint.
+    """
+    from datetime import timedelta
+    from collections import defaultdict
+    from decimal import Decimal
+    
+    current_date = get_current_malaysia_time()
+    
+    # Helper function to convert Decimal to float
+    def to_float(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, Decimal):
+            return float(value)
+        return float(value)
+    
+    # Helper function to parse date and normalize timezone
+    def parse_date(date_value):
+        if date_value is None:
+            return None
+        if isinstance(date_value, datetime):
+            dt = date_value
+        elif isinstance(date_value, str):
+            try:
+                dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
+            except:
+                try:
+                    dt = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S')
+                except:
+                    return None
+        else:
+            return None
+        
+        # Normalize to timezone-aware datetime (Malaysia timezone)
+        import pytz
+        malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
+        if dt.tzinfo is None:
+            dt = malaysia_tz.localize(dt)
+        else:
+            dt = dt.astimezone(malaysia_tz)
+        
+        return dt
+    
+    # Get all transactions
+    transactions_rows = db.execute(
+        text("SELECT * FROM transactions ORDER BY purchase_date DESC")
+    ).fetchall()
+    transactions = [dict(row._mapping) for row in transactions_rows]
+    
+    # Get all subscriptions
+    subscriptions_rows = db.execute(
+        text("SELECT * FROM subscriptions ORDER BY payment_date ASC")
+    ).fetchall()
+    subscriptions = [dict(row._mapping) for row in subscriptions_rows]
+    
+    # Calculate metrics
+    total_income = sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'income')
+    total_expenses = abs(sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'expense'))
+    current_balance = total_income - total_expenses
+    
+    # Monthly spending (current month)
+    current_month_start = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_expenses = 0.0
+    monthly_income = 0.0
+    
+    for t in transactions:
+        if t.get('transaction_type') == 'expense':
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date and purchase_date >= current_month_start:
+                monthly_expenses += abs(to_float(t.get('amount', 0)))
+        elif t.get('transaction_type') == 'income':
+            purchase_date = parse_date(t.get('purchase_date'))
+            if purchase_date and purchase_date >= current_month_start:
+                monthly_income += to_float(t.get('amount', 0))
+    
+    savings_rate = ((monthly_income - monthly_expenses) / monthly_income * 100) if monthly_income > 0 else 0.0
+    
+    # Category spending breakdown
+    category_map = {
+        'food': 'Food & Dining',
+        'transport': 'Transportation',
+        'entertainment': 'Entertainment',
+        'healthcare': 'Healthcare',
+        'shopping': 'Shopping',
+        'education': 'Education',
+        'savings': 'Savings',
+        'other': 'Other'
+    }
+    
+    category_totals = defaultdict(float)
+    for t in transactions:
+        purchase_date = parse_date(t.get('purchase_date'))
+        if purchase_date and purchase_date >= current_month_start and t.get('transaction_type') == 'expense':
+            category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
+            category_totals[category] += abs(to_float(t.get('amount', 0)))
+    
+    # Upcoming renewals (next 7 days)
+    seven_days_later = current_date + timedelta(days=7)
+    upcoming_renewals = []
+    
+    for sub in subscriptions:
+        payment_date = parse_date(sub.get('payment_date'))
+        if payment_date and current_date <= payment_date <= seven_days_later:
+            days_until = (payment_date - current_date).days
+            upcoming_renewals.append({
+                'id': sub.get('subscription_id', 0),
+                'name': sub.get('service_name', 'Unknown'),
+                'amount': to_float(sub.get('cost', 0)),
+                'days_until': days_until,
+                'date': payment_date.strftime("%m/%d/%Y")
+            })
+    
+    return {
+        'transactions': transactions,
+        'subscriptions': subscriptions,
+        'current_balance': current_balance,
+        'monthly_income': monthly_income,
+        'monthly_expenses': monthly_expenses,
+        'savings_rate': savings_rate,
+        'category_totals': category_totals,
+        'category_map': category_map,
+        'upcoming_renewals': upcoming_renewals,
+        'current_date': current_date,
+        'current_month_start': current_month_start,
+        'to_float': to_float,
+        'parse_date': parse_date
+    }
+
+def get_dashboard_data_for_ai(db: Session):
+    """
+    Get dashboard data formatted for AI consumption.
+    Uses the shared dashboard computation logic.
+    """
+    try:
+        data = _compute_dashboard_metrics(db)
+        
+        return {
+            'current_balance': data['current_balance'],
+            'monthly_income': data['monthly_income'],
+            'monthly_expenses': data['monthly_expenses'],
+            'savings_rate': data['savings_rate'],
+            'category_breakdown': dict(sorted(data['category_totals'].items(), key=lambda x: x[1], reverse=True)),
+            'upcoming_renewals': [
+                {
+                    'name': r['name'],
+                    'amount': r['amount'],
+                    'days_until': r['days_until'],
+                    'date': r['date']
+                }
+                for r in data['upcoming_renewals']
+            ],
+            'total_subscriptions': len(data['subscriptions']),
+            'recent_transactions_count': len(data['transactions'][:5])
+        }
+    except Exception as e:
+        logger.error(f"Error getting dashboard data for AI: {e}")
+        return None
+
+@app.get("/dashboard", response_model=DashboardResponse, tags=["Dashboard"])
 def get_dashboard_data(db: Session = Depends(get_db)):
     """
     Get comprehensive dashboard data including metrics, transactions, renewals, and spending breakdowns.
+    Uses shared computation logic that is also used by the AI endpoint.
     """
     try:
-        from datetime import timedelta
-        from collections import defaultdict
         import calendar
+        from datetime import timedelta
         
-        current_date = get_current_malaysia_time()
+        # Use shared computation function
+        data = _compute_dashboard_metrics(db)
         
-        # Helper function to convert Decimal to float
-        from decimal import Decimal
-        def to_float(value):
-            if value is None:
-                return 0.0
-            if isinstance(value, Decimal):
-                return float(value)
-            return float(value)
-        
-        # Get all transactions
-        transactions_rows = db.execute(
-            text("SELECT * FROM transactions ORDER BY purchase_date DESC")
-        ).fetchall()
-        transactions = [dict(row._mapping) for row in transactions_rows]
-        
-        # Get all subscriptions
-        subscriptions_rows = db.execute(
-            text("SELECT * FROM subscriptions ORDER BY payment_date ASC")
-        ).fetchall()
-        subscriptions = [dict(row._mapping) for row in subscriptions_rows]
-        
-        # Calculate metrics
-        total_income = sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'income')
-        total_expenses = abs(sum(to_float(t.get('amount', 0)) for t in transactions if t.get('transaction_type') == 'expense'))
-        current_balance = total_income - total_expenses
-        
-        # Helper function to parse date and normalize timezone
-        def parse_date(date_value):
-            if date_value is None:
-                return None
-            if isinstance(date_value, datetime):
-                dt = date_value
-            elif isinstance(date_value, str):
-                try:
-                    # Try ISO format first
-                    dt = datetime.fromisoformat(date_value.replace('Z', '+00:00'))
-                except:
-                    try:
-                        # Try other common formats
-                        dt = datetime.strptime(date_value, '%Y-%m-%d %H:%M:%S')
-                    except:
-                        return None
-            else:
-                return None
-            
-            # Normalize to timezone-aware datetime (Malaysia timezone)
-            import pytz
-            malaysia_tz = pytz.timezone("Asia/Kuala_Lumpur")
-            if dt.tzinfo is None:
-                # Assume naive datetime is in Malaysia timezone
-                dt = malaysia_tz.localize(dt)
-            else:
-                # Convert to Malaysia timezone
-                dt = dt.astimezone(malaysia_tz)
-            
-            return dt
-        
-        # Monthly spending (current month)
-        current_month_start = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        monthly_expenses = 0.0
-        for t in transactions:
-            if t.get('transaction_type') == 'expense':
-                purchase_date = parse_date(t.get('purchase_date'))
-                if purchase_date and purchase_date >= current_month_start:
-                    monthly_expenses += abs(to_float(t.get('amount', 0)))
-        
-        # Savings rate
-        monthly_income = 0.0
-        for t in transactions:
-            if t.get('transaction_type') == 'income':
-                purchase_date = parse_date(t.get('purchase_date'))
-                if purchase_date and purchase_date >= current_month_start:
-                    monthly_income += to_float(t.get('amount', 0))
-        savings_rate = ((monthly_income - monthly_expenses) / monthly_income * 100) if monthly_income > 0 else 0.0
+        transactions = data['transactions']
+        subscriptions = data['subscriptions']
+        current_balance = data['current_balance']
+        monthly_expenses = data['monthly_expenses']
+        monthly_income = data['monthly_income']
+        savings_rate = data['savings_rate']
+        category_totals = data['category_totals']
+        category_map = data['category_map']
+        upcoming_renewals_data = data['upcoming_renewals']
+        current_date = data['current_date']
+        current_month_start = data['current_month_start']
+        to_float = data['to_float']
+        parse_date = data['parse_date']
         
         # Financial health score (simple calculation based on savings rate and spending patterns)
         health_score = min(100, max(0, int(50 + (savings_rate / 2) + (10 if current_balance > 0 else -20))))
@@ -630,16 +726,6 @@ def get_dashboard_data(db: Session = Depends(get_db)):
         
         # Recent transactions (last 5)
         recent_transactions_list = []
-        category_map = {
-            'food': 'Food & Dining',
-            'transport': 'Transportation',
-            'entertainment': 'Entertainment',
-            'healthcare': 'Healthcare',
-            'shopping': 'Shopping',
-            'education': 'Education',
-            'savings': 'Savings',
-            'other': 'Other'
-        }
         
         for t in transactions[:5]:
             purchase_date = parse_date(t.get('purchase_date'))
@@ -665,34 +751,19 @@ def get_dashboard_data(db: Session = Depends(get_db)):
                 type=transaction_type
             ))
         
-        # Upcoming renewals (next 7 days)
-        upcoming_renewals_list = []
-        seven_days_later = current_date + timedelta(days=7)
+        # Upcoming renewals (already computed in shared function)
+        upcoming_renewals_list = [
+            DashboardRenewal(
+                id=r['id'],
+                name=r['name'],
+                amount=r['amount'],
+                renewalDate=r['date'],
+                daysUntil=r['days_until']
+            )
+            for r in upcoming_renewals_data
+        ]
         
-        for sub in subscriptions:
-            payment_date = parse_date(sub.get('payment_date'))
-            if payment_date:
-                # Check if renewal is within next 7 days
-                if current_date <= payment_date <= seven_days_later:
-                    days_until = (payment_date - current_date).days
-                    renewal_date_str = payment_date.strftime("%m/%d/%Y")
-                    
-                    upcoming_renewals_list.append(DashboardRenewal(
-                        id=sub.get('subscription_id', 0),
-                        name=sub.get('service_name', 'Unknown'),
-                        amount=to_float(sub.get('cost', 0)),
-                        renewalDate=renewal_date_str,
-                        daysUntil=days_until
-                    ))
-        
-        # Category spending (current month)
-        category_totals = defaultdict(float)
-        for t in transactions:
-            purchase_date = parse_date(t.get('purchase_date'))
-            if purchase_date and purchase_date >= current_month_start and t.get('transaction_type') == 'expense':
-                category = category_map.get(t.get('category', '').lower(), t.get('category', 'Other'))
-                category_totals[category] += abs(to_float(t.get('amount', 0)))
-        
+        # Category spending (already computed in shared function)
         total_category_spending = sum(category_totals.values())
         category_spending_list = [
             CategorySpending(
@@ -791,28 +862,85 @@ def get_dashboard_data(db: Session = Depends(get_db)):
         logger.error(f"Error fetching dashboard data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard data: {str(e)}")
 
-@app.post("/claude", response_model=ChatResponse)
+@app.post("/claude", response_model=ChatResponse, tags=["AI"])
 async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     """
     Accepts a message from the user and returns a reply generated by Claude LLM.
+    The AI has access to comprehensive dashboard data including metrics, spending patterns, and insights.
     """
     try:
         if claude_client is None:
             return ChatResponse(reply="Claude API key not configured.", contextUsed=False, chunksFound=0)
 
+        # Get dashboard data for AI
+        dashboard_data = get_dashboard_data_for_ai(db)
+        
+        # Format dashboard data for the prompt
+        dashboard_context = ""
+        if dashboard_data:
+            dashboard_context = f"""
+## Financial Dashboard Summary:
+
+**Current Balance:** ${dashboard_data['current_balance']:,.2f}
+**Monthly Income:** ${dashboard_data['monthly_income']:,.2f}
+**Monthly Expenses:** ${dashboard_data['monthly_expenses']:,.2f}
+**Savings Rate:** {dashboard_data['savings_rate']:.1f}%
+
+**Spending by Category (Current Month):**
+"""
+            for category, amount in list(dashboard_data['category_breakdown'].items())[:10]:
+                percentage = (amount / dashboard_data['monthly_expenses'] * 100) if dashboard_data['monthly_expenses'] > 0 else 0
+                dashboard_context += f"- {category}: ${amount:,.2f} ({percentage:.1f}%)\n"
+            
+            if dashboard_data['upcoming_renewals']:
+                dashboard_context += f"\n**Upcoming Subscription Renewals (Next 7 Days):**\n"
+                for renewal in dashboard_data['upcoming_renewals']:
+                    dashboard_context += f"- {renewal['name']}: ${renewal['amount']:,.2f} (in {renewal['days_until']} days, on {renewal['date']})\n"
+            
+            dashboard_context += f"\n**Total Active Subscriptions:** {dashboard_data['total_subscriptions']}\n"
+
+        # Get recent transactions for context
+        recent_transactions = get_all_transactions_data(db)[:10]
+        transactions_context = ""
+        if recent_transactions:
+            transactions_context = "\n**Recent Transactions (Last 10):**\n"
+            for t in recent_transactions:
+                from decimal import Decimal
+                def to_float(value):
+                    if value is None:
+                        return 0.0
+                    if isinstance(value, Decimal):
+                        return float(value)
+                    return float(value)
+                
+                amount = to_float(t.get('amount', 0))
+                trans_type = t.get('transaction_type', 'expense')
+                if trans_type == 'expense' and amount > 0:
+                    amount = -amount
+                
+                date_str = str(t.get('purchase_date', ''))[:10] if t.get('purchase_date') else 'N/A'
+                transactions_context += f"- {date_str}: {t.get('description', 'Unknown')} - ${abs(amount):,.2f} ({trans_type})\n"
+
         system_prompt = f"""
-        You are an AI financial assistant helping users manage their personal finances.
-        You can provide advice on budgeting, saving, spending analysis, debt management,
-        and general financial planning. Be conversational, helpful, and provide actionable advice.
+You are an AI financial assistant helping users manage their personal finances.
+You can provide advice on budgeting, saving, spending analysis, debt management,
+and general financial planning. Be conversational, helpful, and provide actionable advice.
 
-        Current Malaysia Time: {get_current_malaysia_time()}
+Current Malaysia Time: {get_current_malaysia_time()}
 
-        If the user asks about transactions, use the following data as reference:
-        {get_all_transactions_data(db)}
+{dashboard_context}
 
-        If the user asks about subscriptions, use the following data as reference:
-        {get_all_subscription_data(db)}
-        """
+{transactions_context}
+
+When answering questions:
+- Use the dashboard data to provide insights about spending patterns, savings rate, and financial health
+- Reference specific categories when discussing spending breakdowns
+- Mention upcoming subscription renewals when relevant
+- Provide actionable recommendations based on the user's financial data
+- Be specific with numbers and percentages from the dashboard data
+- If asked about "monthly spending", "spending analysis", "cash flow", or "financial overview", use the dashboard metrics
+- If asked about specific transactions, use the recent transactions list
+"""
 
         res = claude_client.messages.create(
             model="claude-3-haiku-20240307",
@@ -825,14 +953,16 @@ async def claude_chat_endpoint(request: ChatRequest, db: Session = Depends(get_d
 
         return ChatResponse(
             reply=reply_text,
-            contextUsed=True
+            contextUsed=True,
+            chunksFound=1 if dashboard_data else 0
         )
 
     except Exception as e:
+        logger.error(f"Error in Claude endpoint: {e}")
         return ChatResponse(reply=f"Error generating Claude response: {str(e)}", contextUsed=False, chunksFound=0)
         
 # Elevenlabs endpoint - Speech to Text
-@app.post("/stt")
+@app.post("/stt", tags=["AI"])
 async def speech_to_text(request: Request):
     try:
         # Check if ElevenLabs client is available
@@ -858,7 +988,7 @@ async def speech_to_text(request: Request):
         raise HTTPException(status_code=500, detail=f"STT failed: {e}")
 
 # Parse transaction endpoint using Claude AI
-@app.post("/parse-transaction", response_model=ParseTransactionResponse)
+@app.post("/parse-transaction", response_model=ParseTransactionResponse, tags=["AI"])
 async def parse_transaction(request: ParseTransactionRequest):
     """
     Parse transaction data from natural language text using Claude AI.
@@ -984,7 +1114,7 @@ async def parse_transaction(request: ParseTransactionRequest):
         logger.error(f"Error parsing transaction: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to parse transaction: {str(e)}")
 
-@app.post("/parse-subscription", response_model=ParseSubscriptionResponse)
+@app.post("/parse-subscription", response_model=ParseSubscriptionResponse, tags=["AI"])
 async def parse_subscription(request: ParseSubscriptionRequest):
     """
     Parse subscription data from natural language text using Claude AI.
